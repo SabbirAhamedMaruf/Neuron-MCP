@@ -1,0 +1,113 @@
+{
+  "name": "neurons",
+  "displayName": "Neurons",
+  "description": "Dashboard for Neurons MCP: see which coding agents are connected, who is talking to whom, live; browse and clear the shared history; connect Claude Code, Codex and Gemini CLI on any OS.",
+  "version": "0.8.0",
+  "publisher": "neurons-local",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "claude",
+    "codex",
+    "agents"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "neurons",
+          "title": "Neurons",
+          "icon": "media/neurons.svg"
+        }
+      ]
+    },
+    "views": {
+      "neurons": [
+        {
+          "type": "webview",
+          "id": "neurons.dashboard",
+          "name": "Dashboard"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "neurons.openDashboard",
+        "title": "Open Dashboard in Editor",
+        "category": "Neurons",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "neurons.connectAgents",
+        "title": "Connect Agents (Claude Code, Codex, Gemini CLI)",
+        "category": "Neurons"
+      },
+      {
+        "command": "neurons.disconnectAgents",
+        "title": "Disconnect Agents",
+        "category": "Neurons"
+      },
+      {
+        "command": "neurons.clearEverything",
+        "title": "Delete All History (backup first)",
+        "category": "Neurons"
+      },
+      {
+        "command": "neurons.refresh",
+        "title": "Refresh",
+        "category": "Neurons",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "neurons.showLogs",
+        "title": "Show Logs",
+        "category": "Neurons"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "neurons.refresh",
+          "when": "view == neurons.dashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "neurons.openDashboard",
+          "when": "view == neurons.dashboard",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Neurons",
+      "properties": {
+        "neurons.nodePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to Node.js 22.13 or newer. Empty: found automatically (PATH, Homebrew, nvm, Volta, fnm, the Windows installer)."
+        },
+        "neurons.dataDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where the Neurons database lives. Empty: the OS default (`~/.local/share/neurons-mcp`, `~/Library/Application Support/neurons-mcp`, `%LOCALAPPDATA%\\neurons-mcp`). Agents connected by this extension use the same folder."
+        },
+        "neurons.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Development only: a folder with your own `neurons-mcp.mjs` and `neurons.mjs` builds (for example a repo's `dist`). Empty: the copy this extension installs into the data folder."
+        }
+      }
+    }
+  }
+}

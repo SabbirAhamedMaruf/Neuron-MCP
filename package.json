@@ -1,0 +1,25 @@
+{
+  "name": "neurons-mcp",
+  "version": "0.8.0",
+  "description": "Local MCP server that lets coding agents on one machine (Claude Code, Codex, Gemini CLI, OpenCode, ...) share memory, session context, code reviews and messages, without ever sharing auth",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "neurons": "./dist/neurons.mjs",
+    "neurons-mcp": "./dist/neurons-mcp.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/build.mjs --package",
+    "start": "node dist/neurons-mcp.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.25.12",
+    "zod": "^4.1.0"
+  }
+}

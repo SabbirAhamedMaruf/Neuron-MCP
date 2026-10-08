@@ -1,0 +1,6 @@
+node_modules/
+dist/
+extension/server/
+*.vsix
+*.db
+*.db-*
