@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const MIN_NODE = [22, 13];
+// node:sqlite with FTS5: Node 22.16 and later, or 24 and later (23.x lacks it)
+export const MIN_NODE = [22, 16];
 
 function nodeVersion(bin) {
   try {
@@ -16,7 +17,7 @@ function nodeVersion(bin) {
   }
 }
 
-const isSupported = (v) => !!v && (v.major > MIN_NODE[0] || (v.major === MIN_NODE[0] && v.minor >= MIN_NODE[1]));
+const isSupported = (v) => !!v && v.major !== 23 && (v.major > MIN_NODE[0] || (v.major === MIN_NODE[0] && v.minor >= MIN_NODE[1]));
 
 // Newest first, so "the latest nvm/fnm install" wins over older ones
 function versionDirs(root, suffix) {

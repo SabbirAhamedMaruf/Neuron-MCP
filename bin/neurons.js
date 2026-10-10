@@ -4,13 +4,13 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { HOOK } from '../configuration/prompts.js';
 import { AUTO_HANDOFF, CLAIM_GUARD, DASHBOARD, DB_PATH, SESSION_LOOKBACK_MS, WAIT_POLL_MS } from '../configuration/settings.js';
-import { CALL_SELECT, hangUp, pruneLines } from '../src/calls.js';
-import { liveClaims, normalizeClaimPath, overlaps } from '../src/claims.js';
+import { LINE_SELECT, hangUp, pruneLines } from '../src/lines.js';
+import { claimsByRepo, normalizeClaimPath, overlaps } from '../src/claims.js';
 import { createDashboard } from '../src/dashboard.js';
 import { openDb } from '../src/db.js';
 import { HANDOFF_SELECT } from '../src/handoffs.js';
 import { ancestorKeys, connectionCheck, linkSessionToServer, liveServers, normalizeAgent, upsertNativeSession } from '../src/identity.js';
-import { handOver, stopDecision } from '../src/delivery.js';
+import { handOver } from '../src/delivery.js';
 import { inboxRows, unreadCount } from '../src/inbox.js';
 import { readTail } from '../src/native/common.js';
 import { recordEdits, snapshotSession } from '../src/snapshot.js';
@@ -69,10 +69,11 @@ function guardEdit(db, agent, input) {
   if (me) recordEdits(db, me, files);
   if (!db.get('SELECT 1 FROM claims WHERE released_at IS NULL AND expires_at > ? LIMIT 1', now())) return;
   const notes = [];
+  const claimed = claimsByRepo(db);
   for (const file of files) {
     const { repo, path: rel } = normalizeClaimPath(file, null);
     if (!repo) continue;
-    const held = liveClaims(db, repo).find((c) => c.session_id !== me?.id && overlaps(c.path, rel));
+    const held = claimed(repo).find((c) => c.session_id !== me?.id && overlaps(c.path, rel));
     if (held) notes.push((CLAIM_GUARD === 'block' ? HOOK.claimBlocked : HOOK.claimWarning)(`${repo}/${rel}`, held));
   }
   if (!notes.length) return;
@@ -94,25 +95,32 @@ const AT_STOP = new Set(['Stop', 'AfterAgent']);
 const NEW_PROMPT = new Set(['UserPromptSubmit', 'BeforeAgent']);
 // Gemini CLI parses all hook output as JSON; Claude Code and Codex add plain text from prompt hooks to the context
 const JSON_ONLY = new Set(['gemini', 'opencode']);
-// Claude Code and Codex never run their Stop hook after the user interrupts; for the others, auto-listen only follows a turn the user started
-const STOP_SKIPS_INTERRUPTS = new Set(['claude', 'codex']);
+// With nothing on stdout Gemini shows stderr (a Node warning, an error) in the chat, so JSON-only agents always get an answer
+const quiet = (agent) => JSON_ONLY.has(agent) && process.stdout.write('{}\n');
+
+// busy_at only has to be newer than BUSY_STALE_MS, so a tool call refreshes it at most this often: fewer writes, fewer dashboard wake-ups
+const BUSY_REFRESH_MS = 60 * 1000;
 
 const context = (event, text) => JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
 
-// After a tool call: messages that arrived while the agent works, as extra context for the rest of its task
+// After a tool call: messages that arrived while the agent works, as extra context for the rest of its task. A subagent's
+// tool calls carry its parent's session_id plus an agent_id; they keep the session busy but hand nothing to the subagent
 function afterTool(db, agent, input) {
   const me = nativeSession(db, agent, input);
-  const text = me && handOver(db, me, HOOK.midTask);
+  if (me) db.run('UPDATE sessions SET busy_at = ? WHERE id = ? AND (busy_at IS NULL OR busy_at < ?)', now(), me.id, now() - BUSY_REFRESH_MS);
+  const text = me && !input.agent_id && handOver(db, me, HOOK.midTask);
   if (text) process.stdout.write(context(input.hook_event_name, text) + '\n');
+  else quiet(agent);
 }
 
-// At stop: refresh the automatic handoff, then either let the agent stop or continue it (unread messages, auto-listen); JSON only
+// At stop: refresh the automatic handoff; prints nothing, so the agent stops and the user's chat stays its own. A
+// subagent stopping is not its parent's turn ending
 function atStop(db, agent, input) {
-  const me = nativeSession(db, agent, input);
+  quiet(agent);
+  const me = !input.agent_id && nativeSession(db, agent, input);
   if (!me) return;
+  db.run('UPDATE sessions SET busy_at = NULL WHERE id = ?', me.id);
   if (input.cwd) snapshotSession(db, me, input.cwd);
-  const reason = stopDecision(db, me, { listen: STOP_SKIPS_INTERRUPTS.has(agent) || !input.stop_hook_active });
-  if (reason) process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
 }
 
 /*
@@ -121,22 +129,22 @@ function atStop(db, agent, input) {
  *   SessionStart / UserPromptSubmit: plain stdout → added to the model's context
  *   PreToolUse: JSON hookSpecificOutput, only when a claimed file is about to be edited
  *   PostToolUse: JSON hookSpecificOutput.additionalContext, only when messages arrived
- *   Stop: JSON {decision: 'block', reason} to continue the agent, otherwise silent
+ *   Stop: silent (refreshes the automatic handoff, marks the turn over)
  * Gemini CLI: SessionStart, BeforeAgent, AfterTool and AfterAgent, all answered in JSON.
  * SessionStart announces the handle. Unread messages are handed over whole by src/delivery.js.
  */
 async function hook() {
   const agent = normalizeAgent(flag('agent') || process.env.NEURONS_AGENT);
   const raw = await readStdin();
-  if (!agent || !raw.trim()) return;
+  if (!agent || !raw.trim()) return quiet(agent);
   const input = JSON.parse(raw);
-  if (!input.session_id) return;
+  if (!input.session_id) return quiet(agent);
   const db = openDb();
   const event = input.hook_event_name;
   if (event === 'PreToolUse') return guardEdit(db, agent, input);
   if (AFTER_TOOL.has(event)) return afterTool(db, agent, input);
   if (AT_STOP.has(event)) return atStop(db, agent, input);
-  if (event !== 'SessionStart' && event !== 'Register' && !NEW_PROMPT.has(event)) return;
+  if (event !== 'SessionStart' && event !== 'Register' && !NEW_PROMPT.has(event)) return quiet(agent);
   const hookPids = ancestorKeys(process.pid);
   const me = upsertNativeSession(db, {
     agent,
@@ -147,7 +155,7 @@ async function hook() {
     hookPids,
   });
   linkSessionToServer(db, me, hookPids);
-  if (event === 'Register') return;
+  if (event === 'Register') return quiet(agent);
   const lines = [];
   if (event === 'SessionStart') {
     lines.push(HOOK.sessionStart(me.handle));
@@ -163,12 +171,12 @@ async function hook() {
       for (const h of recent) lines.push(HOOK.autoHandoff(h));
     }
   }
-  // A new prompt from the user starts a new stretch: auto-listen may ask again when this turn ends
-  if (NEW_PROMPT.has(event)) db.run('UPDATE sessions SET listen_prompted_at = NULL WHERE id = ?', me.id);
+  // A prompt starts a turn: messages for this session now go in as hidden context instead of starting another
+  if (NEW_PROMPT.has(event)) db.run('UPDATE sessions SET busy_at = ? WHERE id = ?', now(), me.id);
   // A call waiting for this agent may be this session's to pick up now that it is here; unread messages go in whole
   const text = handOver(db, me, HOOK.delivered);
   if (text) lines.push(text);
-  if (!lines.length) return;
+  if (!lines.length) return quiet(agent);
   process.stdout.write((JSON_ONLY.has(agent) ? context(event, lines.join('\n')) : lines.join('\n')) + '\n');
 }
 
@@ -186,9 +194,9 @@ function status() {
   console.log(`\nOpen questions / proposals / review requests (${open.length}):`);
   for (const m of open) console.log(`  #${m.id} ${m.kind.padEnd(8)} ${m.handle} → ${m.to_kind === 'session' ? 'session' : m.to_target || 'any'}: ${oneLine(m.subject || m.body, 70)} (${ago(m.created_at)})`);
   pruneLines(db);
-  const calls = db.all(`${CALL_SELECT} WHERE c.status IN ('ringing', 'connected') ORDER BY c.id`);
-  console.log(`\nLines and ringing calls (${calls.length}):`);
-  for (const c of calls) console.log(`  #${c.id} ${c.from_handle} ${c.status === 'connected' ? `⇄ ${c.answer_handle} (${c.answered_how}, ${ago(c.answered_at)})` : `→ ${c.to_kind === 'agent' ? c.to_target : 'a session'} ringing (${ago(c.created_at)})`}`);
+  const lines = db.all(`${LINE_SELECT} WHERE c.status = 'connected' ORDER BY c.id`);
+  console.log(`\nLines (${lines.length}):`);
+  for (const c of lines) console.log(`  #${c.id} ${c.from_handle} ⇄ ${c.answer_handle} (${ago(c.answered_at)})`);
   const counts = db.get(
     "SELECT (SELECT COUNT(*) FROM memories WHERE status = 'active') AS memories, (SELECT COUNT(*) FROM handoffs) AS handoffs, (SELECT COUNT(*) FROM reviews) AS reviews, (SELECT COUNT(*) FROM messages) AS messages",
   );
@@ -253,10 +261,10 @@ async function watch() {
     for (const c of db.all('SELECT c.*, s.handle FROM claims c JOIN sessions s ON s.id = c.session_id WHERE c.released_at > ? AND c.released_at <= ?', since, t)) {
       console.log(`${paint(90, clock(c.released_at))} ${paint(90, 'release')} ${c.handle} ${c.repo}/${c.path}`);
     }
-    for (const c of db.all(`${CALL_SELECT} WHERE c.answered_at > ? AND c.answered_at <= ?`, since, t)) {
+    for (const c of db.all(`${LINE_SELECT} WHERE c.answered_at > ? AND c.answered_at <= ?`, since, t)) {
       console.log(`${paint(90, clock(c.answered_at))} ${paint(93, `line #${c.id}`)} ${c.from_handle} ⇄ ${c.answer_handle} (${c.answered_how})`);
     }
-    for (const c of db.all(`${CALL_SELECT} WHERE c.ended_at > ? AND c.ended_at <= ?`, since, t)) {
+    for (const c of db.all(`${LINE_SELECT} WHERE c.ended_at > ? AND c.ended_at <= ?`, since, t)) {
       console.log(`${paint(90, clock(c.ended_at))} ${paint(90, `${c.status} #${c.id}`)} ${c.from_handle}${c.answer_handle ? ` ⇄ ${c.answer_handle}` : ''}${c.ended_by ? ` · ${c.ended_by}` : ''}`);
     }
     const current = new Map(liveServers(db).map((s) => [key(s), s]));
@@ -278,6 +286,9 @@ async function watch() {
  *   push {"event":"changed"} whenever another process commits to the DB or an agent window connects or leaves
  * `--once <cmd>` prints one answer and exits, for scripts and debugging.
  */
+// Dashboard commands that change the store
+const WRITES = new Set(['link', 'hangup', 'delete', 'clear']);
+
 async function dashboard() {
   const db = openDb();
   const ops = createDashboard(db);
@@ -292,16 +303,19 @@ async function dashboard() {
   let presence = ops.presence();
   let lastPresence = Date.now();
   const timer = setInterval(() => {
-    const v = db.get('PRAGMA data_version').data_version;
-    let changed = v !== version;
-    version = v;
-    if (Date.now() - lastPresence >= DASHBOARD.presenceMs) {
-      lastPresence = Date.now();
-      const p = ops.presence();
-      changed ||= p !== presence;
-      presence = p;
-    }
-    if (changed) send({ event: 'changed' });
+    // A busy database (another process holding the write lock) skips one poll instead of ending the backend
+    try {
+      const v = db.get('PRAGMA data_version').data_version;
+      let changed = v !== version;
+      version = v;
+      if (Date.now() - lastPresence >= DASHBOARD.presenceMs) {
+        lastPresence = Date.now();
+        const p = ops.presence();
+        changed ||= p !== presence;
+        presence = p;
+      }
+      if (changed) send({ event: 'changed' });
+    } catch {}
   }, DASHBOARD.pollMs);
   const lines = readline.createInterface({ input: process.stdin });
   for await (const line of lines) {
@@ -311,6 +325,8 @@ async function dashboard() {
       req = JSON.parse(line);
       if (typeof ops[req.cmd] !== 'function' || req.cmd === 'presence') throw new Error(`Unknown command "${req.cmd}".`);
       send({ id: req.id, ok: true, data: await ops[req.cmd](req.args || {}) });
+      // data_version never moves for this connection's own commits, so the other views of the dashboard hear of them here
+      if (WRITES.has(req.cmd)) send({ event: 'changed' });
     } catch (err) {
       send({ id: req?.id ?? null, ok: false, error: err?.message || String(err) });
     }
@@ -322,13 +338,13 @@ async function dashboard() {
 function disconnect() {
   const arg = rest[0];
   if (!arg) {
-    console.error('usage: neurons disconnect <call id | handle | all>');
+    console.error('usage: neurons disconnect <line id | handle | all>');
     process.exitCode = 1;
     return;
   }
   const db = openDb();
-  let calls = db.all("SELECT * FROM calls WHERE status IN ('ringing', 'connected')");
-  if (/^#?\d+$/.test(arg)) calls = calls.filter((c) => c.id === Number(arg.replace('#', '')));
+  let lines = db.all("SELECT * FROM calls WHERE status = 'connected'");
+  if (/^#?\d+$/.test(arg)) lines = lines.filter((c) => c.id === Number(arg.replace('#', '')));
   else if (arg !== 'all') {
     const s = db.get('SELECT id FROM sessions WHERE handle = ?', arg.toLowerCase());
     if (!s) {
@@ -336,22 +352,23 @@ function disconnect() {
       process.exitCode = 1;
       return;
     }
-    calls = calls.filter((c) => c.from_session === s.id || c.answered_by === s.id || (c.to_kind === 'session' && c.to_target === s.id));
+    lines = lines.filter((c) => c.from_session === s.id || c.answered_by === s.id);
   }
-  const n = calls.filter((c) => hangUp(db, c, 'the CLI')).length;
-  console.log(n ? `Hung up ${n} line(s) or call(s).` : 'Nothing to hang up.');
+  const n = lines.filter((c) => hangUp(db, c, 'the CLI')).length;
+  console.log(n ? `Hung up ${n} line(s).` : 'Nothing to hang up.');
 }
 
 const COMMANDS = { hook, status, inbox, watch, dashboard, disconnect };
 
 try {
   if (!COMMANDS[cmd]) {
-    console.log('usage: neurons <hook --agent <name> | status | inbox <handle> | watch [--last N] [--full] | disconnect <call id | handle | all> | dashboard [--once <cmd>]>');
+    console.log('usage: neurons <hook --agent <name> | status | inbox <handle> | watch [--last N] [--full] | disconnect <line id | handle | all> | dashboard [--once <cmd>]>');
   } else {
     await COMMANDS[cmd]();
   }
 } catch (err) {
   // A hook must never break the agent's prompt; report and exit cleanly
   console.error(`[neurons] ${cmd} failed: ${err?.message || err}`);
-  if (cmd !== 'hook') process.exitCode = 1;
+  if (cmd === 'hook') quiet(normalizeAgent(flag('agent') || process.env.NEURONS_AGENT));
+  else process.exitCode = 1;
 }

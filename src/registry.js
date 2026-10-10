@@ -34,9 +34,7 @@ export function registerTools(server, db, identity) {
           // A tool call proves this window is alive, even if a sleep made its row look stale
           identity.heartbeat();
           const me = identity.current();
-          // Shows a form popup in this agent's window, tied to this tool call; null when the client cannot
-          const ask = identity.popups ? (params, options) => server.server.elicitInput(params, { ...options, relatedRequestId: extra.requestId }) : null;
-          let text = await handler(args, me, { db, identity, extra, ask });
+          let text = await handler(args, me, { db, identity, extra });
           if (banner) {
             const n = unreadCount(db, me);
             if (n) text += `\n\n${unreadBanner(me.handle, n)}`;

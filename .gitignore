@@ -1,6 +1,7 @@
 node_modules/
 dist/
 extension/server/
+extension/media/canvas.*
 *.vsix
 *.db
 *.db-*

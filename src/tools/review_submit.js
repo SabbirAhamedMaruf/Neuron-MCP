@@ -10,15 +10,17 @@ export default async function reviewSubmit(a, me, { db }) {
   if (!r) throw new NeuronsError(`No review #${a.id}.`);
   if (r.requester_session === me.id) throw new NeuronsError('You cannot review your own request.');
   const msg = requestMessage(db, a.id);
+  const taken = (row = r) => new NeuronsError(`Review #${a.id} is ${row.status}${row.reviewer_handle ? ` by ${row.reviewer_handle}` : ''}.`);
   if (r.status === 'open') {
-    if (msg && !isRecipient(msg, me)) throw new NeuronsError(`Review #${a.id} is not addressed to you.`);
+    if (!isRecipient({ from_session: r.requester_session, to_kind: r.to_kind, to_target: r.to_target }, me)) throw new NeuronsError(`Review #${a.id} is not addressed to you.`);
   } else if (r.reviewer_session !== me.id) {
-    throw new NeuronsError(`Review #${a.id} is ${r.status}${r.reviewer_handle ? ` by ${r.reviewer_handle}` : ''}.`);
+    throw taken();
   }
   const findings = bySeverity(a.findings || []);
   db.tx(() => {
-    db.run(
-      "UPDATE reviews SET status = 'done', reviewer_session = ?, verdict = ?, summary = ?, findings = ?, claimed_at = COALESCE(claimed_at, ?), completed_at = ? WHERE id = ?",
+    // Still open, or this reviewer's: two reviewers submitting at once cannot both post a result
+    const res = db.run(
+      "UPDATE reviews SET status = 'done', reviewer_session = ?, verdict = ?, summary = ?, findings = ?, claimed_at = COALESCE(claimed_at, ?), completed_at = ? WHERE id = ? AND (status = 'open' OR reviewer_session = ?)",
       me.id,
       a.verdict,
       a.summary,
@@ -26,7 +28,9 @@ export default async function reviewSubmit(a, me, { db }) {
       now(),
       now(),
       a.id,
+      me.id,
     );
+    if (!res.changes) throw taken(getReview(db, a.id));
     if (msg) db.run("UPDATE messages SET status = 'closed' WHERE id = ?", msg.id);
     postMessage(db, {
       from: me.id,

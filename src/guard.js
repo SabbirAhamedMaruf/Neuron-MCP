@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { LIMITS, PLATFORM } from '../configuration/settings.js';
+import { HOMES, LIMITS, PLATFORM } from '../configuration/settings.js';
 
 export class NeuronsError extends Error {}
 
@@ -25,7 +25,7 @@ const PATTERNS = [
   ['url_credentials', /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]{3,}@/gi],
   [
     'secret_assignment',
-    /\b[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|PRIVATE_KEY|SERVICE_ROLE)[A-Z0-9_]*\s*[:=]\s*["']?([A-Za-z0-9_\-.+/=]{12,})/g,
+    /\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|PRIVATE_KEY|SERVICE_ROLE)[A-Z0-9_]*\s*[:=]\s*["']?([A-Za-z0-9_\-.+/=]{12,})/g,
   ],
   [
     'secret_json_field',
@@ -43,7 +43,6 @@ function matches(text) {
   const hits = [];
   if (!text) return hits;
   for (const [kind, re] of PATTERNS) {
-    re.lastIndex = 0;
     for (const m of text.matchAll(re)) {
       if (m[1] !== undefined && !looksGenerated(m[1])) continue;
       hits.push({ kind, index: m.index, length: m[0].length });
@@ -58,15 +57,15 @@ function findSecrets(text) {
 
 export function redact(text) {
   if (!text) return text;
-  const hits = matches(text).sort((a, b) => b.index - a.index);
-  let out = text;
-  let floor = Infinity;
-  for (const h of hits) {
-    // Overlapping hits are already covered by the later replacement
-    if (h.index + h.length > floor) continue;
-    out = out.slice(0, h.index) + `[REDACTED:${h.kind}]` + out.slice(h.index + h.length);
-    floor = h.index;
+  // Overlapping hits merge into one span, so a short match inside a longer secret never leaves the rest of it showing
+  const spans = [];
+  for (const h of matches(text).sort((a, b) => a.index - b.index || b.length - a.length)) {
+    const last = spans.at(-1);
+    if (last && h.index < last.end) last.end = Math.max(last.end, h.index + h.length);
+    else spans.push({ start: h.index, end: h.index + h.length, kind: h.kind });
   }
+  let out = text;
+  for (const span of spans.reverse()) out = out.slice(0, span.start) + `[REDACTED:${span.kind}]` + out.slice(span.end);
   return out;
 }
 
@@ -122,6 +121,34 @@ export function isSensitivePath(p) {
   return !NOTE_EXTS.has(path.extname(base).toLowerCase()) && SENSITIVE_WORDS.test(base);
 }
 
+// Windows paths compare without case
+const samePath = PLATFORM === 'win32' ? (p) => p.toLowerCase() : (p) => p;
+
+// Every agent's own folder (memory, chats, auth), real paths; a dotfiles repo can hold one behind a symlink
+let agentHomes = null;
+function realHomes() {
+  agentHomes ||= Object.values(HOMES).flatMap((h) => {
+    try {
+      return [samePath(fs.realpathSync(h))];
+    } catch {
+      return [];
+    }
+  });
+  return agentHomes;
+}
+
+// True for a file inside any agent's folder: those are read only by that agent's own memory and session readers,
+// never through a repo path, so one agent cannot reach another's memory or chats
+export function inAgentHome(file) {
+  let real;
+  try {
+    real = samePath(fs.realpathSync(file));
+  } catch {
+    real = samePath(path.resolve(file));
+  }
+  return realHomes().some((h) => real === h || real.startsWith(h + path.sep));
+}
+
 // Resolves symlinks and accepts the file only when it really lives under one of the roots
 export function resolveAllowed(file, roots, { exts = ['.md', '.txt'] } = {}) {
   let real;
@@ -132,16 +159,14 @@ export function resolveAllowed(file, roots, { exts = ['.md', '.txt'] } = {}) {
   }
   if (isSensitivePath(real)) return null;
   if (exts && !exts.includes(path.extname(real).toLowerCase())) return null;
-  // Windows paths compare without case
-  const same = PLATFORM === 'win32' ? (p) => p.toLowerCase() : (p) => p;
   const inside = roots.some((root) => {
     let r;
     try {
-      r = same(fs.realpathSync(root));
+      r = samePath(fs.realpathSync(root));
     } catch {
       return false;
     }
-    return same(real) === r || same(real).startsWith(r + path.sep);
+    return samePath(real) === r || samePath(real).startsWith(r + path.sep);
   });
   return inside ? real : null;
 }

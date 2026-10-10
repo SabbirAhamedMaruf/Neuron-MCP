@@ -5,7 +5,7 @@ export default {
   name: 'send',
   title: 'Neurons Send',
   description:
-    'Ask (question), tell (note) or suggest a memory change (proposal) to "codex", "claude", a handle, "any" (first to answer) or "all" (each other agent, for a second opinion). Goes over your open line to that agent, or rings its sessions until one picks up; fails if none is running. "local" asks the free local model; local_first tries it before the target. Keep it short. wait_seconds blocks for the reply.',
+    'Ask (question), tell (note) or suggest a memory change (proposal) to "codex", "claude", a handle, or "all" (every chat you are connected to, for a second opinion). Messages travel only over lines the user connected in the Neurons dashboard; without one this fails. "local" asks the free local model; local_first tries it before the target. Keep it short. wait_seconds blocks for the reply.',
   input: {
     to: z.string().min(1),
     body: z.string().min(1).max(LIMITS.message),

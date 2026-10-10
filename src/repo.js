@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { RECALL } from '../configuration/settings.js';
-import { isSensitivePath, redact } from './guard.js';
+import { inAgentHome, isSensitivePath, redact } from './guard.js';
 import { oneLine } from './util.js';
 
 // Tracked and untracked files, minus anything gitignored (.env, build output)
@@ -15,7 +15,7 @@ export function grepRepo(root, terms) {
       const hits = [];
       for (const line of stdout.split('\n')) {
         const m = line.match(/^(.+?):(\d+):(.*)$/);
-        if (!m || isSensitivePath(m[1])) continue;
+        if (!m || isSensitivePath(m[1]) || inAgentHome(path.join(root, m[1]))) continue;
         const lower = m[3].toLowerCase();
         const matched = terms.filter((t) => lower.includes(t)).length;
         if (!matched) continue;

@@ -24,7 +24,10 @@ export default async function reviewGet(a, me, { db }) {
   const msg = requestMessage(db, id);
   let note = '';
   if (a.claim !== false && r.status === 'open' && r.requester_session !== me.id) {
-    if (msg && !isRecipient(msg, me)) throw new NeuronsError(`Review #${id} is addressed to ${targetLabel(db, r.to_kind, r.to_target)}, not you.`);
+    // The review itself says who it is for; its inbox message may have been deleted in the dashboard
+    if (!isRecipient({ from_session: r.requester_session, to_kind: r.to_kind, to_target: r.to_target }, me)) {
+      throw new NeuronsError(`Review #${id} is addressed to ${targetLabel(db, r.to_kind, r.to_target)}, not you.`);
+    }
     db.tx(() => {
       db.run("UPDATE reviews SET status = 'claimed', reviewer_session = ?, claimed_at = ? WHERE id = ? AND status = 'open'", me.id, now(), id);
       if (msg) db.run("UPDATE messages SET status = 'closed' WHERE id = ?", msg.id);

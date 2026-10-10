@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { AUTO_HANDOFF } from '../configuration/settings.js';
 import { normalizeClaimPath } from './claims.js';
@@ -57,7 +58,9 @@ export function snapshotSession(db, session, cwd) {
   const state = gitState(top);
   if (!state) return null;
   const { head, branch } = state;
-  const mine = state.files.filter((f) => touched.includes(f.path));
+  // An untracked folder is one `? dir/` entry in git status; the session's own new files inside it count one by one
+  const inFolder = (f) => f.path.endsWith('/') && touched.some((t) => t.startsWith(f.path));
+  const mine = state.files.flatMap((f) => (inFolder(f) ? touched.filter((t) => t.startsWith(f.path) && fs.existsSync(path.join(top, t))).map((t) => ({ path: t, status: 'new' })) : touched.includes(f.path) ? [f] : []));
   const commits =
     session.start_head && head && session.start_head !== head
       ? (git(top, ['log', '--format=%h %s', '-n', String(AUTO_HANDOFF.maxCommits), `${session.start_head}..HEAD`, '--', ...touched], AUTO_HANDOFF.gitTimeoutMs) || '')
@@ -74,7 +77,7 @@ export function snapshotSession(db, session, cwd) {
   // Protected names (.env, credentials, ...) are counted, not listed
   const listed = mine.filter((f) => !isSensitivePath(path.join(top, f.path)));
   const hidden = mine.length - listed.length;
-  const others = state.files.length - mine.length;
+  const others = state.files.filter((f) => !inFolder(f) && !touched.includes(f.path)).length;
   const summary = [
     `Branch ${branch}${head ? ` at ${head.slice(0, 7)}` : ''}.`,
     hidden ? `${hidden} protected file(s) not listed.` : null,

@@ -198,6 +198,46 @@ const MIGRATIONS = [
   `
   ALTER TABLE servers ADD COLUMN popups INTEGER NOT NULL DEFAULT 0;
   `,
+  // Databases that ran migration 3 before session_files was added to it never got the table
+  `
+  CREATE TABLE IF NOT EXISTS session_files (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    edited_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, repo, path)
+  );
+  `,
+  // Set while the agent is in a turn (prompt → stop), so a message for an idle agent can start one
+  `
+  ALTER TABLE sessions ADD COLUMN busy_at INTEGER;
+  `,
+  // When the relay queued a message into Codex, so no process (after a leader change) queues it twice
+  `
+  ALTER TABLE messages ADD COLUMN relayed_at INTEGER;
+  `,
+  // Plain indexes for the every-second call queries and the heartbeat (calls_open, being partial, serves almost none)
+  `
+  CREATE INDEX IF NOT EXISTS calls_status ON calls(status);
+  CREATE INDEX IF NOT EXISTS sessions_server ON sessions(server_pid, server_start);
+  `,
+  // Leftovers of the listening design that nothing reads any more (the user asked for the clean-up, 2026-10-08); SQLite
+  // has no DROP COLUMN IF EXISTS, and a migration that throws would leave every agent without Neurons
+  (raw) => {
+    const has = (table, column) => raw.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?').get(table, column);
+    raw.exec('DROP TABLE IF EXISTS settings; DROP INDEX IF EXISTS calls_open');
+    for (const [table, column] of [['sessions', 'listening_at'], ['sessions', 'listen_prompted_at'], ['sessions', 'listened_at'], ['servers', 'popups']]) {
+      if (has(table, column)) raw.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    }
+  },
+  // Calls no longer ring (the user draws lines in the dashboard): calls left ringing end as cancelled, their messages
+  // undelivered. servers.surface: where the agent runs (its editor panel or a terminal), for the dashboard's canvas
+  (raw) => {
+    const t = Date.now();
+    if (!raw.prepare("SELECT 1 FROM pragma_table_info('servers') WHERE name = 'surface'").get()) raw.exec('ALTER TABLE servers ADD COLUMN surface TEXT');
+    raw.prepare("UPDATE messages SET status = 'cancelled' WHERE link_type = 'call' AND status = 'open' AND link_id IN (SELECT id FROM calls WHERE status = 'ringing')").run();
+    raw.prepare("UPDATE calls SET status = 'cancelled', ended_by = 'calls no longer ring', ended_at = ? WHERE status = 'ringing'").run(t);
+  },
 ];
 
 // node:sqlite rejects undefined, so absent optional values bind as NULL
@@ -257,7 +297,9 @@ class Db {
     // Two agents can start at the same moment; IMMEDIATE serialises them and the re-check skips done work
     this.tx(() => {
       for (let v = version(); v < MIGRATIONS.length; v++) {
-        this.raw.exec(MIGRATIONS[v]);
+        const step = MIGRATIONS[v];
+        if (typeof step === 'function') step(this.raw);
+        else this.raw.exec(step);
         this.raw.exec(`PRAGMA user_version = ${v + 1}`);
       }
     });

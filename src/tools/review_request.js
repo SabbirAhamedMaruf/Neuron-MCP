@@ -1,6 +1,6 @@
 import { LIMITS } from '../../configuration/settings.js';
 import { NeuronsError, assertClean, assertLength } from '../guard.js';
-import { overLine } from '../calls.js';
+import { overLine } from '../lines.js';
 import { assertReachable, resolveTarget } from '../identity.js';
 import { postMessage } from '../inbox.js';
 import { now } from '../util.js';
@@ -8,7 +8,8 @@ import { now } from '../util.js';
 export default async function reviewRequest(a, me, { db }) {
   if (!a.diff && !a.base && !a.files?.length) throw new NeuronsError('Give the reviewer something: diff, base/head, or files.');
   assertLength('diff', a.diff, LIMITS.diff);
-  assertClean({ title: a.title, focus: a.focus, diff: a.diff, files: a.files || [] });
+  assertLength('repo', a.repo, LIMITS.repoName);
+  assertClean({ title: a.title, focus: a.focus, diff: a.diff, base: a.base, head: a.head, repo: a.repo, files: a.files || [] });
   const target = overLine(db, me, resolveTarget(db, a.to || 'any'));
   if (target.kind === 'session' && target.target === me.id) throw new NeuronsError('You cannot review your own request.');
   assertReachable(db, target);

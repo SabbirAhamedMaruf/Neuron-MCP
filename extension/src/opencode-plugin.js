@@ -4,23 +4,29 @@ export const OPENCODE_PLUGIN_NAME = 'neurons.js';
 // Marks the file as ours, so Disconnect removes only this plugin and status can tell which build it runs
 export const OPENCODE_PLUGIN_MARK = '// NEURONS_PLUGIN';
 
-export function opencodePlugin({ node, hookScript }) {
+export function opencodePlugin({ node, hookScript, dataDir }) {
   return `${OPENCODE_PLUGIN_MARK}
 // Written by the Neurons editor extension (Connect); reconnecting overwrites it, Disconnect removes it.
-// Messages from other agents reach the model after each tool call and when a turn ends, like Claude Code's hooks.
+// Messages from other agents reach the model as context after each tool call, like Claude Code's hooks; the chat is untouched.
 import { spawn } from "node:child_process";
 
 const NODE = ${JSON.stringify(node)};
-const HOOK = ${JSON.stringify(hookScript)};
+const ARGS = ${JSON.stringify([hookScript, 'hook', '--agent', 'opencode', ...(dataDir ? ['--data-dir', dataDir] : [])])};
 
-// Runs the Neurons hook with a Claude-style event and returns its JSON answer, or null
+// Runs the Neurons hook with a Claude-style event and returns its JSON answer, or null; a hook that hangs is stopped
+// after 10 s, so it never holds up a tool call
 function hook(input) {
   return new Promise((resolve) => {
     let out = "";
-    const child = spawn(NODE, [HOOK, "hook", "--agent", "opencode"], { stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn(NODE, ARGS, { stdio: ["pipe", "pipe", "ignore"] });
+    const timer = setTimeout(() => child.kill(), 10000);
     child.stdout.on("data", (d) => (out += d));
-    child.on("error", () => resolve(null));
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
     child.on("close", () => {
+      clearTimeout(timer);
       try {
         resolve(out.trim() ? JSON.parse(out) : null);
       } catch {
@@ -31,7 +37,7 @@ function hook(input) {
   });
 }
 
-export const NeuronsPlugin = async ({ client, directory }) => {
+export const NeuronsPlugin = async ({ directory }) => {
   const registered = new Set();
   // Subagent sessions are left alone; only the session you talk to gets messages
   const children = new Set();
@@ -58,9 +64,8 @@ export const NeuronsPlugin = async ({ client, directory }) => {
       const sessionID = event.properties?.sessionID;
       if (!sessionID || children.has(sessionID)) return;
       await register(sessionID);
-      // OpenCode reports idle after a cancel too, so this never starts auto-listen; unread messages still come through as a prompt
-      const reason = (await hook({ session_id: sessionID, cwd: directory, hook_event_name: "Stop", stop_hook_active: true }))?.reason;
-      if (reason) await client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: reason }] } });
+      // A finished turn refreshes the session's automatic handoff (git facts only)
+      await hook({ session_id: sessionID, cwd: directory, hook_event_name: "Stop" });
     },
   };
 };

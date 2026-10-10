@@ -16,8 +16,14 @@ const APP_DATA = {
   win32: env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'),
 };
 
+// The hooks get a custom data folder as a flag, since each agent starts them with its own environment
+const flagDir = (() => {
+  const i = process.argv.indexOf('--data-dir');
+  return i > 1 ? process.argv[i + 1] : null;
+})();
+
 // Neurons' own database lives outside every agent's config dir
-export const DATA_DIR = env.NEURONS_DATA_DIR || path.join(APP_DATA[process.platform] || XDG_DATA, 'neurons-mcp');
+export const DATA_DIR = env.NEURONS_DATA_DIR || flagDir || path.join(APP_DATA[process.platform] || XDG_DATA, 'neurons-mcp');
 export const DB_PATH = path.join(DATA_DIR, 'neurons.db');
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
@@ -37,14 +43,12 @@ export const LIMITS = {
   // Questions and replies between agents; short messages keep both sides' token use down
   message: 8000,
   diff: 300000,
+  // A repo name passed by hand
+  repoName: 200,
   fileBytes: 512 * 1024,
   outputChars: 20000,
-  // send wait_seconds: how long an asker may block for its answer
+  // send and inbox wait_seconds: how long an agent may block for an answer (Codex's tool_timeout_sec must be above it)
   waitSeconds: 120,
-  // inbox wait_seconds: listen mode waits this long per call (Codex's tool_timeout_sec must be above it)
-  listenSeconds: 900,
-  // A call nobody picks up within this long becomes a missed call
-  ringSeconds: 120,
 };
 
 // Default output sizes; an agent can ask for more per call
@@ -86,9 +90,11 @@ export const HEARTBEAT_MS = 60 * 1000;
 // A server that has not heartbeated for this long is gone, even if its pid is alive again (Windows has no process start time to tell)
 export const SERVER_STALE_MS = 3 * HEARTBEAT_MS;
 
+// A turn with no prompt, tool or stop for this long is treated as over (a crashed turn never sends Stop)
+export const BUSY_STALE_MS = 30 * 60 * 1000;
+
 // The editor dashboard: how much it loads at once, how often it looks for changes, how many backups a bulk delete keeps
 export const DASHBOARD = {
-  feedLimit: 100,
   pageSize: 50,
   pollMs: 700,
   presenceMs: 3000,
@@ -122,9 +128,6 @@ export const SEMANTIC = {
   timeoutMs: 20 * 1000,
   minScore: 0.5,
 };
-
-// Auto-listen is a dashboard switch (stored in the DB); this is its value until someone flips it
-export const AUTO_LISTEN_DEFAULT = true;
 
 // What the edit hook does when a file is claimed by another session: 'warn' tells the agent, 'block' refuses the edit
 export const CLAIM_GUARD = env.NEURONS_CLAIM_GUARD === 'block' ? 'block' : 'warn';

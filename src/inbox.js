@@ -1,59 +1,57 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { INBOX_HINTS, opinionsHeader } from '../configuration/prompts.js';
 import { BROADCAST_TTL_MS, LIMITS, OUTPUT, WAIT_POLL_MS } from '../configuration/settings.js';
-import { connectionCheck } from './identity.js';
 import { ago, clip, now, oneLine, parseJson } from './util.js';
 
 /*
  * What lands in a session's inbox:
  *   to this session            → until read
  *   to its agent / to "any"    → questions and proposals while unanswered,
- *                                review requests while unclaimed, calls while ringing,
+ *                                review requests while unclaimed,
  *                                notes and handoffs for BROADCAST_TTL_MS
+ * Messages of the older ringing calls that nobody picked up (status missed, declined or cancelled) were never delivered.
  */
-const VISIBLE = `
-  m.from_session != :me
-  AND (
-    (m.to_kind = 'session' AND m.to_target = :me)
-    OR (
-      ((m.to_kind = 'agent' AND m.to_target = :agent) OR m.to_kind = 'any')
-      AND (
-        (m.kind IN ('question', 'proposal', 'review', 'call') AND m.status = 'open')
-        OR (m.kind NOT IN ('question', 'proposal', 'review', 'call') AND m.created_at > :since)
-      )
-    )
-  )`;
+const CALL_HIDDEN = `COALESCE(m.link_type, '') = 'call' AND m.status IN ('missed', 'declined', 'cancelled')`;
+const BROADCAST = `((m.kind IN ('question', 'proposal', 'review') AND m.status = 'open') OR (m.kind NOT IN ('question', 'proposal', 'review') AND m.created_at > :since))`;
+const visible = (addressed) => `m.from_session != :me AND NOT (${CALL_HIDDEN}) AND (${addressed})`;
+// Every branch starts with an equality on messages_to, so SQLite reads the index instead of the whole table
+const VISIBLE = visible(`(m.to_kind = 'session' AND m.to_target = :me)
+  OR (m.to_kind = 'agent' AND m.to_target = :agent AND ${BROADCAST})
+  OR (m.to_kind = 'any' AND ${BROADCAST})`);
+// Messages to this one session: line traffic and replies
+const TO_SESSION = visible(`m.to_kind = 'session' AND m.to_target = :me`);
 
 const params = (me, extra = {}) => ({ me: me.id, agent: me.agent, since: now() - BROADCAST_TTL_MS, ...extra });
 
-// A ringing call's message, which a window that shows call popups leaves to the popup
-const NOT_RINGING = ` AND NOT (m.link_type = 'call' AND m.to_kind != 'session')`;
-
-export function inboxRows(db, me, { includeRead = false, limit = 30, ringing = true } = {}) {
+// Newest first, or the oldest ones first for hand-overs, so a long backlog is never starved by new arrivals
+export function inboxRows(db, me, { includeRead = false, limit = 30, sessionOnly = false, oldestFirst = false } = {}) {
+  const order = oldestFirst ? 'ASC' : 'DESC';
   return db.all(
     `SELECT m.*, s.handle AS from_handle, s.agent AS from_agent, s.model AS from_model, r.read_at
      FROM messages m
      JOIN sessions s ON s.id = m.from_session
      LEFT JOIN message_reads r ON r.message_id = m.id AND r.session_id = :me
-     WHERE ${VISIBLE} AND (:includeRead = 1 OR r.read_at IS NULL)${ringing ? '' : NOT_RINGING}
-     ORDER BY m.created_at DESC
+     WHERE ${sessionOnly ? TO_SESSION : VISIBLE} AND (:includeRead = 1 OR r.read_at IS NULL)
+     ORDER BY m.created_at ${order}, m.id ${order}
      LIMIT :limit`,
-    params(me, { includeRead: includeRead ? 1 : 0, limit }),
+    // node:sqlite refuses named parameters the statement does not use, and the session-only one uses fewer
+    sessionOnly ? { me: me.id, includeRead: includeRead ? 1 : 0, limit } : params(me, { includeRead: includeRead ? 1 : 0, limit }),
   );
 }
 
-export function unreadCount(db, me, { ringing = true } = {}) {
+export function unreadCount(db, me) {
   return db.get(
     `SELECT COUNT(*) AS n FROM messages m
      LEFT JOIN message_reads r ON r.message_id = m.id AND r.session_id = :me
-     WHERE ${VISIBLE} AND r.read_at IS NULL${ringing ? '' : NOT_RINGING}`,
+     WHERE ${VISIBLE} AND r.read_at IS NULL`,
     params(me),
   ).n;
 }
 
+// One statement for any number of ids, so it is atomic without a transaction (callers may already be in one)
 export function markRead(db, me, ids) {
-  const t = now();
-  for (const id of ids) db.run('INSERT OR IGNORE INTO message_reads (message_id, session_id, read_at) VALUES (?, ?, ?)', id, me.id, t);
+  if (!ids.length) return;
+  db.run('INSERT OR IGNORE INTO message_reads (message_id, session_id, read_at) SELECT value, ?, ? FROM json_each(?)', me.id, now(), JSON.stringify(ids));
 }
 
 // May this session answer the message? Only if it was addressed to it
@@ -85,14 +83,11 @@ export function postMessage(db, { from, toKind, toTarget, kind, subject, body, r
   return Number(res.lastInsertRowid);
 }
 
-// A call's message is addressed to the whole agent while it rings and to one session once picked up
-export const isRinging = (m) => m.link_type === 'call' && m.to_kind !== 'session';
-
 export function formatMessage(db, m) {
-  const call = m.link_type === 'call' ? (isRinging(m) ? ` · ringing call #${m.link_id}` : ` · line #${m.link_id}`) : '';
+  const call = m.link_type === 'call' ? ` · line #${m.link_id}` : '';
   const head = `#${m.id} ${m.kind} from ${m.from_handle}${m.reply_to ? ` re #${m.reply_to}` : ''}${call} · ${ago(m.created_at)}${m.subject ? ` · ${m.subject}` : ''}`;
   const refs = parseJson(m.refs, []);
-  const hint = isRinging(m) ? INBOX_HINTS.ringing : INBOX_HINTS[m.kind];
+  const hint = INBOX_HINTS[m.kind];
   return [head, clip(m.body, OUTPUT.messageBodyChars), refs.length ? `refs: ${refs.join(', ')}` : null, hint ? hint(m) : null].filter(Boolean).join('\n');
 }
 
@@ -122,31 +117,23 @@ export function formatInbox(db, rows) {
     }
     if (shown.has(group)) continue;
     shown.add(group);
-    const asked = db.all("SELECT id, to_target, subject, body FROM messages WHERE link_type = 'group' AND link_id = ? ORDER BY id", group);
-    const answered = new Set(db.all(`SELECT DISTINCT reply_to FROM messages WHERE reply_to IN (${asked.map(() => '?').join(', ')})`, ...asked.map((q) => q.id)).map((r) => r.reply_to));
-    const waiting = asked.filter((q) => !answered.has(q.id)).map((q) => q.to_target);
+    const asked = db.all(
+      "SELECT m.id, COALESCE(s.handle, m.to_target) AS to_label, m.subject, m.body FROM messages m LEFT JOIN sessions s ON m.to_kind = 'session' AND s.id = m.to_target WHERE m.link_type = 'group' AND m.link_id = ? ORDER BY m.id",
+      group,
+    );
+    const answered = new Set(db.all('SELECT DISTINCT reply_to FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))', JSON.stringify(asked.map((q) => q.id))).map((r) => r.reply_to));
+    const waiting = asked.filter((q) => !answered.has(q.id)).map((q) => q.to_label);
     const members = rows.filter((r) => groupOf(r) === group);
     blocks.push([opinionsHeader(group, asked[0]?.subject || oneLine(asked[0]?.body, 60), answered.size, asked.length, waiting), ...members.map((r) => formatMessage(db, r))].join('\n\n'));
   }
   return blocks.join('\n---\n');
 }
 
-// Handles of the sessions behind these live servers, for telling the sender who got the message
-export function connectedHandles(db, servers, me) {
-  const connected = connectionCheck(db, servers);
-  return db
-    .all('SELECT * FROM sessions WHERE ended_at IS NULL AND id != ? ORDER BY last_seen DESC LIMIT 200', me.id)
-    .filter(connected)
-    .map((s) => s.handle)
-    .slice(0, 6);
-}
-
 function repliesTo(db, ids) {
-  const marks = ids.map(() => '?').join(', ');
   return db.all(
     `SELECT m.*, s.handle AS from_handle, s.agent AS from_agent, s.model AS from_model FROM messages m
-     JOIN sessions s ON s.id = m.from_session WHERE m.reply_to IN (${marks}) ORDER BY m.created_at`,
-    ...ids,
+     JOIN sessions s ON s.id = m.from_session WHERE m.reply_to IN (SELECT value FROM json_each(?)) ORDER BY m.created_at`,
+    JSON.stringify(ids),
   );
 }
 

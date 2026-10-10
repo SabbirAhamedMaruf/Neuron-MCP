@@ -5,31 +5,30 @@ A dashboard for Neurons MCP, the local server through which coding agents on one
 ## What you get
 
 - **A Neurons icon in the activity bar.** It opens a dashboard in the sidebar. **Open in editor** shows the same dashboard in a full editor tab.
-- **Agents.** Claude Code, Codex, Gemini CLI and OpenCode are detected automatically. Each agent shows:
-  - whether it is connected to Neurons;
-  - which of its sessions are running, with model, repo and task.
-
-  **Connect** writes that agent's *global* MCP configuration, plus its hooks for Claude Code and Codex, in one click. **Disconnect** removes them again.
-- **Call popup.** A listening agent window shows the call itself (Pick up / Not here / Decline), when its client supports MCP forms.
-- **Calls.** When an agent calls another agent, the call rings here with an **Accept on …** button for each session. Pick one and it gets the message; from then on that line carries every message between the two until you press **Hang up**. **Decline** stops the ringing.
-- **Auto-answer and listening.** Each session has an **Auto-answer** switch: when it is on, that session picks up calls to its agent by itself. A **listening** badge shows sessions waiting in listen mode, which also pick up by themselves.
-- **Auto-listen switch** (beside the Agents heading, on by default). When it is on, Claude Code and Codex go on listening for messages each time they finish a turn, so a message is answered at once. Press Stop (Esc in Claude Code) in an agent to give it new work.
-- **Live feed.** Who asked whom what, and the replies, updated as it happens. Click a row to open the whole conversation.
-- **History.** Search all messages, and filter by agent or kind.
+- **The connection graph** (in an editor tab; the sidebar's Live tab lists chats and opens it). Every open chat is a box in its own color, named by its title, with its model, repo and a small panel of server-style lights: PWR (open), ACT (working), TX and RX (a message sent or received).
+  - Drag a line from one chat to another to connect them; only connected chats can talk.
+  - Each message travels along its line as a dot, and both boxes blink.
+  - Select a line and press Delete (or its ×) to hang up.
+  - Click a chat to see its lines and open the conversation.
+  - The canvas moves only while you look at it, so it never slows the editor down.
+- **Agents setup.** From the canvas toolbar, each agent's state with **Connect** and **Disconnect**. Connect writes that agent's *global* MCP configuration plus its hooks (a plugin for OpenCode) in one click; Disconnect removes them again.
+- **Conversations.** Every exchange between two chats as a chat view: what Claude asked, what Codex replied, in full. Delete one message or the whole conversation.
+- **Messages for idle agents.** Codex gets them in its chat and answers at once; other agents answer at their next turn.
+- **Search.** The Conversations tab searches every message, and filters by agent or kind; a conversation shows when any of its messages matches. It updates live.
 - **Handoffs, Reviews, Notes and Claims.** Every record Neurons keeps, readable in full and deletable one by one.
 - **Storage.** The database size and counts. You can clear any category, or delete everything. Every bulk delete saves a backup first, and the newest 5 backups are kept.
-- **Status bar.** The number of connected agents, and a highlighted "ringing" while a call waits for you. Click it to open the dashboard. Neither the status bar nor the dashboard ever prompts an agent.
+- **Status bar.** The number of open chats and lines. Click it to open the dashboard. Neither the status bar nor the dashboard ever prompts an agent.
 
 ## Requirements
 
-Node.js 22.13 or newer. The extension finds it on your PATH, or in the usual install folders: Homebrew, nvm, Volta, fnm, asdf, mise, and the Windows installer. You can also set `neurons.nodePath`. Git is needed for repo features.
+Node.js 22.16 or newer (not 23.x, whose `node:sqlite` lacks full-text search). The extension finds it on your PATH, or in the usual install folders: Homebrew, nvm, Volta, fnm, asdf, mise, and the Windows installer. You can also set `neurons.nodePath`. Git is needed for repo features.
 
 ## What Connect writes
 
 | agent | MCP config (user-level) | hooks |
 |---|---|---|
 | Claude Code | `~/.claude.json` → `mcpServers.neurons` | `~/.claude/settings.json`: SessionStart, UserPromptSubmit, PreToolUse (edits), PostToolUse (every tool), Stop |
-| Codex | `~/.codex/config.toml` → `[mcp_servers.neurons]`, `tool_timeout_sec = 960` for listen mode | `~/.codex/hooks.json`: the same five. Trust them once with `/hooks` in Codex. |
+| Codex | `~/.codex/config.toml` → `[mcp_servers.neurons]`, `tool_timeout_sec = 180` | `~/.codex/hooks.json`: the same five. Trust them once with `/hooks` in Codex. |
 | Gemini CLI | `~/.gemini/settings.json` → `mcpServers.neurons` | the same file: SessionStart, BeforeAgent, AfterTool, AfterAgent |
 | OpenCode | `~/.config/opencode/opencode.json` → `mcp.neurons` | a plugin, `~/.config/opencode/plugins/neurons.js` (never one of your own of that name) |
 

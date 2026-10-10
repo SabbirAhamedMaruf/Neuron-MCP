@@ -1,9 +1,12 @@
 {
   "name": "neurons",
   "displayName": "Neurons",
-  "description": "Dashboard for Neurons MCP: see which coding agents are connected, who is talking to whom, live; browse and clear the shared history; connect Claude Code, Codex and Gemini CLI on any OS.",
-  "version": "0.8.0",
-  "publisher": "neurons-local",
+  "description": "Let the coding agents on your machine ask each other: connect their chats on a live canvas, follow every conversation, and set up Claude Code, Codex, Gemini CLI and OpenCode in one click.",
+  "version": "0.16.4",
+  "publisher": "sabbirahamedmaruf",
+  "author": {
+    "name": "Sabbir Ahamed Maruf"
+  },
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.85.0"
@@ -59,11 +62,6 @@
         "category": "Neurons"
       },
       {
-        "command": "neurons.clearEverything",
-        "title": "Delete All History (backup first)",
-        "category": "Neurons"
-      },
-      {
         "command": "neurons.refresh",
         "title": "Refresh",
         "category": "Neurons",
@@ -95,7 +93,7 @@
         "neurons.nodePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to Node.js 22.13 or newer. Empty: found automatically (PATH, Homebrew, nvm, Volta, fnm, the Windows installer)."
+          "markdownDescription": "Path to Node.js 22.16 or newer (not 23.x). Empty: found automatically (PATH, Homebrew, nvm, Volta, fnm, the Windows installer)."
         },
         "neurons.dataDir": {
           "type": "string",

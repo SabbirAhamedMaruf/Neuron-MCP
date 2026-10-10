@@ -1,12 +1,14 @@
-import { assertClean } from '../guard.js';
-import { overLine } from '../calls.js';
+import { LIMITS } from '../../configuration/settings.js';
+import { assertClean, assertLength } from '../guard.js';
+import { overLine } from '../lines.js';
 import { assertReachable, resolveTarget } from '../identity.js';
 import { postMessage } from '../inbox.js';
 import { now } from '../util.js';
 
 export default async function handoffPublish(a, me, { db }) {
   const { title, goal, repo, to, ...rest } = a;
-  assertClean({ title, goal, ...rest });
+  assertClean({ title, goal, repo, ...rest });
+  assertLength('repo', repo, LIMITS.repoName);
   const target = to ? overLine(db, me, resolveTarget(db, to)) : null;
   if (target) assertReachable(db, target);
   const data = {

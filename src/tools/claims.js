@@ -1,4 +1,4 @@
-import { claimLine, liveClaims, normalizeClaimPath, overlaps } from '../claims.js';
+import { claimLine, claimsByRepo, liveClaims, normalizeClaimPath, overlaps } from '../claims.js';
 import { list } from '../format.js';
 import { NeuronsError, assertClean } from '../guard.js';
 import { now } from '../util.js';
@@ -8,7 +8,8 @@ function claim(a, me, db) {
   assertClean({ reason: a.reason, paths: a.paths });
   const wanted = a.paths.map((p) => normalizeClaimPath(p, a.repo || me.repo));
   if (wanted.some((w) => !w.repo)) throw new NeuronsError('Pass `repo` or absolute paths inside a git repo.');
-  const others = wanted.flatMap((w) => liveClaims(db, w.repo).filter((c) => c.session_id !== me.id && overlaps(c.path, w.path)));
+  const held = claimsByRepo(db);
+  const others = [...new Map(wanted.flatMap((w) => held(w.repo).filter((c) => c.session_id !== me.id && overlaps(c.path, w.path))).map((c) => [c.id, c])).values()];
   if (others.length && !a.force) return `Not claimed, held by another session:\n${list(others.map(claimLine))}\nAsk it first, or force.`;
   const t = now();
   const ttl = a.ttl_minutes || 120;

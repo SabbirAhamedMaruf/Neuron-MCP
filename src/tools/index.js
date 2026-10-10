@@ -1,6 +1,5 @@
 // Tool name → handler; the matching config (prompt, schema, flags) is configuration/tools/<name>.js
 import claims from './claims.js';
-import connect from './connect.js';
 import discover from './discover.js';
 import disconnect from './disconnect.js';
 import handoff_get from './handoff_get.js';
@@ -18,7 +17,6 @@ import session_read from './session_read.js';
 
 export const HANDLERS = {
   claims,
-  connect,
   discover,
   disconnect,
   handoff_get,

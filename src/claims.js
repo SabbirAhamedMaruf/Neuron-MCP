@@ -14,11 +14,20 @@ export function normalizeClaimPath(p, fallbackRepo) {
   return { repo: fallbackRepo, path: path.posix.normalize(clean.replace(/\\/g, '/').replace(/^\.\//, '')) };
 }
 
+// Live claims per repo, looked up once each (and the live windows once in all) for a batch of paths
+export function claimsByRepo(db) {
+  const connected = connectionCheck(db);
+  const byRepo = new Map();
+  return (repo) => {
+    if (!byRepo.has(repo)) byRepo.set(repo, liveClaims(db, repo, connected));
+    return byRepo.get(repo);
+  };
+}
+
 export const overlaps = (a, b) => a === b || a === '.' || b === '.' || a.startsWith(b + '/') || b.startsWith(a + '/');
 
 // Unreleased, unexpired claims whose session is still connected
-export function liveClaims(db, repo) {
-  const connected = connectionCheck(db);
+export function liveClaims(db, repo, connected = connectionCheck(db)) {
   return db
     .all(
       `SELECT c.*, s.handle, s.agent, s.server_pid, s.server_start, s.hook_pids, s.last_seen, s.ended_at FROM claims c

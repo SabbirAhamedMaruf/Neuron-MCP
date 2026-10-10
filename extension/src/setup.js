@@ -4,14 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { OPENCODE_PLUGIN_MARK, OPENCODE_PLUGIN_NAME, opencodePlugin } from './opencode-plugin.js';
 
-// Listen mode keeps an inbox call open for up to 900 s; agents with a hard per-call limit get a little more than that
-const TOOL_TIMEOUT_SEC = 960;
+// send and inbox block for up to 120 s; agents with a hard per-call limit get a little more than that
+const TOOL_TIMEOUT_SEC = 180;
 
 export const AGENTS = {
-  claude: { name: 'Claude Code', hooks: true, bins: ['claude'] },
-  codex: { name: 'Codex', hooks: true, bins: ['codex'] },
-  gemini: { name: 'Gemini CLI', hooks: true, bins: ['gemini'] },
-  opencode: { name: 'OpenCode', hooks: true, bins: ['opencode'] },
+  claude: { name: 'Claude Code', bins: ['claude'] },
+  codex: { name: 'Codex', bins: ['codex'] },
+  gemini: { name: 'Gemini CLI', bins: ['gemini'] },
+  opencode: { name: 'OpenCode', bins: ['opencode'] },
 };
 
 // Where each agent keeps its user-level config; the same layout on every OS, under the home folder
@@ -46,6 +46,8 @@ function findOnPath(name, extraDirs) {
 
 // --- file helpers: never clobber a file we cannot parse, keep one backup of the user's version, write atomically
 
+const stripJsonComments = (text) => text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str || '');
+
 function readJson(file) {
   let text;
   try {
@@ -57,12 +59,22 @@ function readJson(file) {
   try {
     return JSON.parse(text);
   } catch (err) {
-    throw new Error(`${file} is not valid JSON (${err.message}); fix it or edit it by hand.`);
+    let commented = false;
+    try {
+      JSON.parse(stripJsonComments(text));
+      commented = true;
+    } catch {}
+    throw new Error(commented ? `${file} has comments, which rewriting it would lose; edit it by hand.` : `${file} is not valid JSON (${err.message}); fix it or edit it by hand.`);
   }
 }
 
-// The original's permissions carry over to the backup and the new file (~/.claude.json is 0600); new files start private
-function writeFileSafely(file, text) {
+// The original's permissions carry over to the backup and the new file (~/.claude.json is 0600); new files start private.
+// A config that is a symlink (dotfiles) is written through, so the link stays and its target changes
+function writeFileSafely(link, text) {
+  let file = link;
+  try {
+    file = fs.realpathSync(link);
+  } catch {}
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let mode = 0o600;
   if (fs.existsSync(file)) {
@@ -92,7 +104,8 @@ function quote(p) {
   return `"${v.replace(/(["$`\\])/g, '\\$1')}"`;
 }
 
-const hookCommand = (node, script, agent) => `${quote(node)} ${quote(script)} hook --agent ${agent}`;
+// A custom data folder rides along as a flag: each agent starts its hooks with its own environment
+const hookCommand = (node, script, agent, dataDir) => `${quote(node)} ${quote(script)} hook --agent ${agent}${dataDir ? ` --data-dir ${quote(dataDir)}` : ''}`;
 
 const isNeuronsHook = (h) => typeof h?.command === 'string' && /neurons(\.m?js)?["']?\s+hook\s+--agent\b/.test(h.command);
 
@@ -116,10 +129,13 @@ function ourPlugin(file) {
   }
 }
 
-function withoutNeuronsHooks(hooks = {}) {
+// Hook groups are objects; any other list under "hooks" (Gemini's "disabled" names) is the user's and stays as it is
+const isHookList = (groups) => Array.isArray(groups) && groups.every((g) => g && typeof g === 'object' && !Array.isArray(g));
+
+function withoutNeuronsHooks(hooks) {
   const out = {};
-  for (const [event, groups] of Object.entries(hooks)) {
-    if (!Array.isArray(groups)) {
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    if (!isHookList(groups)) {
       out[event] = groups;
       continue;
     }
@@ -129,49 +145,79 @@ function withoutNeuronsHooks(hooks = {}) {
   return out;
 }
 
-function countNeuronsHooks(hooks = {}) {
-  return Object.values(hooks).filter((groups) => Array.isArray(groups) && groups.some((g) => (g.hooks || []).some(isNeuronsHook))).length;
+function countNeuronsHooks(hooks) {
+  return Object.values(hooks || {}).filter((groups) => isHookList(groups) && groups.some((g) => (g.hooks || []).some(isNeuronsHook))).length;
 }
 
-function writeHooks(file, agent, command) {
-  const cfg = readJson(file);
+// The config with our hooks (re)added; a "hooks" value of a shape we do not know is refused, never overwritten
+function withHooks(file, cfg, agent, command) {
+  const bad = (what) => new Error(`${file}: ${what}; fix it or add the Neurons hooks by hand.`);
+  if (cfg.hooks != null && (typeof cfg.hooks !== 'object' || Array.isArray(cfg.hooks))) throw bad('"hooks" is not an object');
   const hooks = withoutNeuronsHooks(cfg.hooks);
   for (const [event, matcher] of Object.entries(HOOK_EVENTS[agent])) {
+    if (hooks[event] != null && !isHookList(hooks[event])) throw bad(`"hooks.${event}" is not a list of hook groups`);
     hooks[event] = [...(hooks[event] || []), { ...(matcher ? { matcher } : {}), hooks: [hookEntry(agent, command)] }];
   }
-  writeJson(file, { ...cfg, hooks });
+  return { ...cfg, hooks };
+}
+
+// The config without our hooks, or null when it has none
+function withoutHooks(cfg) {
+  if (!countNeuronsHooks(cfg.hooks)) return null;
+  const hooks = withoutNeuronsHooks(cfg.hooks);
+  const next = { ...cfg, hooks };
+  if (!Object.keys(hooks).length) delete next.hooks;
+  return next;
 }
 
 function removeHooks(file) {
   if (!fs.existsSync(file)) return;
-  const cfg = readJson(file);
-  if (!countNeuronsHooks(cfg.hooks)) return;
-  const hooks = withoutNeuronsHooks(cfg.hooks);
-  const next = { ...cfg, hooks };
-  if (!Object.keys(hooks).length) delete next.hooks;
-  writeJson(file, next);
+  const next = withoutHooks(readJson(file));
+  if (next) writeJson(file, next);
 }
 
 // --- Codex's TOML: only our own [mcp_servers.neurons] tables are ever touched
 
-const NEURONS_TABLE = /^\s*\[\s*mcp_servers\s*\.\s*"?neurons"?\s*(\.[^\]]*)?\]\s*$/;
+// A table header may end in a comment: [mcp_servers.neurons]  # mine
+const NEURONS_TABLE = /^\s*\[\s*mcp_servers\s*\.\s*"?neurons"?\s*(\.[^\]]*)?\]\s*(#.*)?$/;
+const NEURONS_MAIN_TABLE = /^\s*\[\s*mcp_servers\s*\.\s*"?neurons"?\s*\]\s*(#.*)?$/;
 const ANY_TABLE = /^\s*\[/;
 
+// Only the removed tables' own lines go, and the blank lines before them; the rest of the file (multi-line strings too) stays byte for byte
 function withoutNeuronsTables(text) {
   const out = [];
   let skipping = false;
   for (const line of text.split(/\r?\n/)) {
-    if (NEURONS_TABLE.test(line)) skipping = true;
-    else if (ANY_TABLE.test(line)) skipping = false;
+    if (NEURONS_TABLE.test(line)) {
+      if (!skipping) while (out.length && !out.at(-1).trim()) out.pop();
+      skipping = true;
+      continue;
+    }
+    if (skipping && ANY_TABLE.test(line)) {
+      skipping = false;
+      if (out.length) out.push('');
+    }
     if (!skipping) out.push(line);
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+  return out.join('\n').trimEnd();
+}
+
+// A "neurons" server written another way (an inline table under [mcp_servers], or dotted keys) cannot be replaced safely
+function otherNeuronsEntry(text) {
+  let table = '';
+  for (const line of text.split(/\r?\n/)) {
+    const header = line.match(/^\s*\[\s*([^\]]+?)\s*\]\s*(#.*)?$/);
+    if (header) table = header[1].replace(/\s+/g, '');
+    else if (table === 'mcp_servers' && /^\s*"?neurons"?\s*[.=]/.test(line)) return true;
+    else if (table === '' && /^\s*mcp_servers\s*\.\s*"?neurons"?\s*[.=]/.test(line)) return true;
+  }
+  return false;
 }
 
 // The server path and tool timeout of our [mcp_servers.neurons] table, or null when there is none
 function codexEntry(text) {
   const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^\s*\[\s*mcp_servers\s*\.\s*"?neurons"?\s*\]\s*$/.test(l));
+  const start = lines.findIndex((l) => NEURONS_MAIN_TABLE.test(l));
   if (start === -1) return null;
   const entry = { server: '', timeout: 0 };
   for (let i = start + 1; i < lines.length && !ANY_TABLE.test(lines[i]); i++) {
@@ -184,8 +230,6 @@ function codexEntry(text) {
 }
 
 // --- OpenCode: plain opencode.json is edited; a commented opencode.jsonc is never rewritten
-
-const stripJsonComments = (text) => text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str || '');
 
 function opencodeFile(p) {
   if (!fs.existsSync(p.jsonc)) return { file: p.mcp, editable: true };
@@ -212,6 +256,20 @@ function detectAgents(paths) {
   });
 }
 
+// Moves whenever one of the agents' config files changes: a few stats instead of reading and parsing them all
+export function configStamp() {
+  return Object.values(agentPaths())
+    .flatMap((p) => [p.mcp, p.hooks, p.jsonc, p.plugin].filter(Boolean))
+    .map((f) => {
+      try {
+        return fs.statSync(f).mtimeMs;
+      } catch {
+        return 0;
+      }
+    })
+    .join(',');
+}
+
 // What is registered right now, per agent: the server path its MCP config points to, and how many Neurons hooks it has
 export function agentStatus({ serverPath }) {
   const paths = agentPaths();
@@ -219,7 +277,7 @@ export function agentStatus({ serverPath }) {
     const p = paths[agent.id];
     let registered = null;
     let hooks = 0;
-    // Registered with settings an older Neurons wrote (a tool timeout too short for listen mode)
+    // Registered with settings an older Neurons wrote (a tool timeout too short for a blocking send)
     let outdated = false;
     let error = null;
     try {
@@ -243,7 +301,7 @@ export function agentStatus({ serverPath }) {
     } catch (err) {
       error = err.message;
     }
-    const hooksWanted = AGENTS[agent.id].hooks ? Object.keys(HOOK_EVENTS[agent.id]).length : 0;
+    const hooksWanted = Object.keys(HOOK_EVENTS[agent.id]).length;
     const norm = (x) => (process.platform === 'win32' ? path.resolve(x).toLowerCase() : path.resolve(x));
     const same = (a, b) => !!a && !!b && norm(a) === norm(b);
     return {
@@ -263,18 +321,21 @@ export function agentStatus({ serverPath }) {
 /*
  * Writes one agent's global MCP registration, plus its hooks (Claude Code,
  * Codex, Gemini CLI) or plugin (OpenCode). `server` and `hookScript` are absolute paths to the built
- * neurons-mcp.mjs and neurons.mjs, `node` an absolute Node 22.13+ binary.
+ * neurons-mcp.mjs and neurons.mjs, `node` an absolute Node 22.16+ binary.
  * Running agent sessions pick it up when they are restarted.
  */
 export function connectAgent(id, { node, server, hookScript, dataDir }) {
   const p = agentPaths()[id];
   const env = { NEURONS_AGENT: id, ...(dataDir ? { NEURONS_DATA_DIR: dataDir } : {}) };
+  const command = hookCommand(node, hookScript, id, dataDir);
   if (id === 'claude') {
     const cfg = readJson(p.mcp);
+    const hooks = withHooks(p.hooks, readJson(p.hooks), 'claude', command);
     writeJson(p.mcp, { ...cfg, mcpServers: { ...(cfg.mcpServers || {}), neurons: { type: 'stdio', command: node, args: [server], env } } });
-    writeHooks(p.hooks, 'claude', hookCommand(node, hookScript, 'claude'));
+    writeJson(p.hooks, hooks);
   } else if (id === 'codex') {
     const text = fs.existsSync(p.mcp) ? fs.readFileSync(p.mcp, 'utf8') : '';
+    const hooks = withHooks(p.hooks, readJson(p.hooks), 'codex', command);
     const block = [
       '[mcp_servers.neurons]',
       `command = ${JSON.stringify(node)}`,
@@ -285,12 +346,13 @@ export function connectAgent(id, { node, server, hookScript, dataDir }) {
       ...Object.entries(env).map(([k, v]) => `${k} = ${JSON.stringify(v)}`),
     ].join('\n');
     const rest = withoutNeuronsTables(text);
+    if (otherNeuronsEntry(rest)) throw new Error(`${p.mcp} defines "neurons" as an inline table or dotted keys; remove that by hand, then connect again.`);
     writeFileSafely(p.mcp, `${rest ? `${rest}\n\n` : ''}${block}\n`);
-    writeHooks(p.hooks, 'codex', hookCommand(node, hookScript, 'codex'));
+    writeJson(p.hooks, hooks);
   } else if (id === 'gemini') {
+    // The server and the hooks share settings.json: one write, so its backup is the user's own version
     const cfg = readJson(p.mcp);
-    writeJson(p.mcp, { ...cfg, mcpServers: { ...(cfg.mcpServers || {}), neurons: { command: node, args: [server], env, timeout: TOOL_TIMEOUT_SEC * 1000 } } });
-    writeHooks(p.hooks, 'gemini', hookCommand(node, hookScript, 'gemini'));
+    writeJson(p.mcp, withHooks(p.mcp, { ...cfg, mcpServers: { ...(cfg.mcpServers || {}), neurons: { command: node, args: [server], env, timeout: TOOL_TIMEOUT_SEC * 1000 } } }, 'gemini', command));
   } else if (id === 'opencode') {
     const { file, editable } = opencodeFile(p);
     if (!editable) throw new Error(`${file} has comments, which would be lost. Add "neurons" under "mcp" by hand: {"type":"local","command":[${JSON.stringify(node)},${JSON.stringify(server)}],"environment":{"NEURONS_AGENT":"opencode"},"enabled":true}`);
@@ -298,7 +360,7 @@ export function connectAgent(id, { node, server, hookScript, dataDir }) {
     const cfg = readJson(file);
     writeJson(file, { ...cfg, mcp: { ...(cfg.mcp || {}), neurons: { type: 'local', command: [node, server], environment: env, enabled: true } } });
     fs.mkdirSync(path.dirname(p.plugin), { recursive: true });
-    writeFileSafely(p.plugin, opencodePlugin({ node, hookScript }));
+    writeFileSafely(p.plugin, opencodePlugin({ node, hookScript, dataDir }));
   } else {
     throw new Error(`Unknown agent "${id}".`);
   }
@@ -306,18 +368,25 @@ export function connectAgent(id, { node, server, hookScript, dataDir }) {
 
 export function disconnectAgent(id) {
   const p = agentPaths()[id];
+  if (!p) throw new Error(`Unknown agent "${id}".`);
   if (id === 'claude' || id === 'gemini') {
     const cfg = readJson(p.mcp);
+    let next = cfg;
     if (cfg.mcpServers?.neurons) {
       const { neurons, ...others } = cfg.mcpServers;
-      writeJson(p.mcp, { ...cfg, mcpServers: others });
+      next = { ...cfg, mcpServers: others };
     }
+    // Gemini keeps its hooks in the same file: one write
+    if (p.hooks === p.mcp) next = withoutHooks(next) || next;
+    if (next !== cfg) writeJson(p.mcp, next);
   } else if (id === 'codex') {
     if (fs.existsSync(p.mcp)) {
       const text = fs.readFileSync(p.mcp, 'utf8');
-      if (codexEntry(text) !== null || NEURONS_TABLE.test(text)) writeFileSafely(p.mcp, `${withoutNeuronsTables(text)}\n`);
+      if (text.split(/\r?\n/).some((l) => NEURONS_TABLE.test(l))) writeFileSafely(p.mcp, `${withoutNeuronsTables(text)}\n`);
     }
   } else if (id === 'opencode') {
+    // The plugin goes first: a commented config that must be edited by hand does not keep it running
+    if (ourPlugin(p.plugin)) fs.rmSync(p.plugin);
     const { file, editable } = opencodeFile(p);
     const cfg = editable ? readJson(file) : null;
     if (cfg?.mcp?.neurons) {
@@ -326,9 +395,8 @@ export function disconnectAgent(id) {
     } else if (!editable) {
       throw new Error(`${file} has comments; remove "neurons" under "mcp" by hand.`);
     }
-    if (ourPlugin(p.plugin)) fs.rmSync(p.plugin);
   }
-  if (p.hooks) removeHooks(p.hooks);
+  if (p.hooks && p.hooks !== p.mcp) removeHooks(p.hooks);
 }
 
 // Copies the built server into a stable folder, so agent configs survive extension updates; returns the paths to register

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { LIMITS, OUTPUT, RECALL } from '../../configuration/settings.js';
 import { joinBlocks, list } from '../format.js';
-import { NeuronsError, readAllowedText, redact } from '../guard.js';
+import { NeuronsError, inAgentHome, readAllowedText, redact } from '../guard.js';
 import { getOwnNote, ownSessionWindow } from '../native/index.js';
 import { ago, clip, iso, repoRootOf } from '../util.js';
 
@@ -33,7 +33,7 @@ async function sessionWindow(me, nativeId, line) {
 
 function repoExcerpt(file, line) {
   const top = repoRootOf(file);
-  const read = top && readAllowedText(file, [top], { exts: null });
+  const read = top && !inAgentHome(file) && readAllowedText(file, [top], { exts: null });
   if (!read) throw new NeuronsError(`Cannot open ${file}: it is outside a git repo or a protected file.`);
   const all = read.text.split('\n');
   const from = Math.max(1, line - RECALL.repoContextLines);

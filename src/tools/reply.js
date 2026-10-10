@@ -1,7 +1,5 @@
-import { CALL } from '../../configuration/prompts.js';
-import { callById } from '../calls.js';
 import { NeuronsError, assertClean } from '../guard.js';
-import { isRecipient, isRinging, markRead, postMessage } from '../inbox.js';
+import { isRecipient, markRead, postMessage } from '../inbox.js';
 import { oneLine } from '../util.js';
 
 export default async function reply(a, me, { db }) {
@@ -10,11 +8,8 @@ export default async function reply(a, me, { db }) {
   const msg = db.get('SELECT * FROM messages WHERE id = ?', a.message_id);
   if (!msg) throw new NeuronsError(`No message #${a.message_id}.`);
   if (!isRecipient(msg, me)) throw new NeuronsError(`#${a.message_id} was not addressed to you (${me.handle}).`);
-  // A call is answered by picking up first, so the user chooses which session takes it
-  if (isRinging(msg)) {
-    const call = callById(db, msg.link_id);
-    throw new NeuronsError(call?.status === 'ringing' ? CALL.answerFirst(call.id) : CALL.ended(call || { id: msg.link_id, status: 'missed' }));
-  }
+  // A message of the older ringing calls that nobody picked up was never delivered
+  if (msg.link_type === 'call' && ['missed', 'declined', 'cancelled'].includes(msg.status)) throw new NeuronsError(`#${msg.id} was never delivered; nothing to answer.`);
   if (status !== 'answered' && msg.kind !== 'proposal') throw new NeuronsError('accepted/rejected only apply to proposals.');
   const id = db.tx(() => {
     const replyId = postMessage(db, {
@@ -29,7 +24,8 @@ export default async function reply(a, me, { db }) {
       replyTo: msg.id,
       status: 'closed',
     });
-    if (msg.status === 'open') db.run('UPDATE messages SET status = ? WHERE id = ?', status, msg.id);
+    // Only the first answer sets the status; a concurrent accept and reject cannot overwrite each other
+    db.run("UPDATE messages SET status = ? WHERE id = ? AND status = 'open'", status, msg.id);
     markRead(db, me, [msg.id]);
     return replyId;
   });

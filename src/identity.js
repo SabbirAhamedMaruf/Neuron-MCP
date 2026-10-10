@@ -158,6 +158,10 @@ function createSession(db, fields) {
 export function upsertNativeSession(db, { agent, nativeId, transcriptPath, cwd, model, hookPids }) {
   const t = now();
   const repo = cwd ? detectRepo(cwd) : null;
+  // Where the session started, so the automatic handoff can list the commits made since; git runs before the write
+  // lock is taken, and only once per session in a repo
+  const known = db.get('SELECT start_head FROM sessions WHERE agent = ? AND native_id = ?', agent, nativeId);
+  const head = repo && !known?.start_head ? headOf(cwd) : null;
   return db.tx(() => {
     const existing = db.get('SELECT * FROM sessions WHERE agent = ? AND native_id = ?', agent, nativeId);
     if (!existing) {
@@ -170,8 +174,7 @@ export function upsertNativeSession(db, { agent, nativeId, transcriptPath, cwd, 
         model,
         hook_pids: json(hookPids),
         hook_seen_at: t,
-        // Where the session started, so the automatic handoff can list the commits made since
-        start_head: cwd ? headOf(cwd) : null,
+        start_head: head,
       });
     }
     // The repo follows the cwd, including out of a repo; a cwd-less hook keeps what was known
@@ -187,12 +190,30 @@ export function upsertNativeSession(db, { agent, nativeId, transcriptPath, cwd, 
       model,
       json(hookPids),
       t,
-      !existing.start_head && cwd ? headOf(cwd) : null,
+      head,
       t,
       existing.id,
     );
     return db.get('SELECT * FROM sessions WHERE id = ?', existing.id);
   });
+}
+
+// Where the agent runs, for the dashboard: 'editor' (a VS Code panel), 'terminal', 'app' or null when unknown.
+// Claude Code says so in CLAUDE_CODE_ENTRYPOINT; Codex's editor panel and desktop app run it under `codex app-server`.
+function surfaceOf(agent) {
+  if (agent === 'claude') {
+    const entry = process.env.CLAUDE_CODE_ENTRYPOINT || '';
+    return /vscode|jetbrains|ide/i.test(entry) ? 'editor' : entry === 'cli' ? 'terminal' : entry ? 'app' : null;
+  }
+  if (agent === 'codex') {
+    let args = '';
+    try {
+      if (PLATFORM === 'linux') args = fs.readFileSync(`/proc/${process.ppid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+      else if (PLATFORM === 'darwin') args = execFileSync('ps', ['-o', 'args=', '-p', String(process.ppid)], { encoding: 'utf8', timeout: 3000 });
+    } catch {}
+    return args ? (/\bapp-server\b/.test(args) ? 'editor' : 'terminal') : null;
+  }
+  return agent === 'gemini' || agent === 'opencode' ? 'terminal' : null;
 }
 
 /*
@@ -219,57 +240,91 @@ export class Identity {
     this.cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     this.processSessionId = null;
     this.registered = false;
-    this.popups = false;
   }
 
-  // Name and version for handles and presence; whether the client can show a form popup (MCP elicitation) for incoming calls
-  setClient(info, capabilities) {
+  setClient(info) {
     this.client = info?.name ? `${info.name}${info.version ? ' ' + info.version : ''}` : null;
-    this.popups = !!capabilities?.elicitation?.form;
     if (!this.agent) this.agent = normalizeAgent(info?.name) || 'unknown';
+  }
+
+  // The newest hook-linked native session running under this window's agent process
+  linkedSession(t) {
+    if (!this.hostKeys.length) return null;
+    const marks = this.hostKeys.map(() => '?').join(', ');
+    return this.db.get(
+      `SELECT s.* FROM sessions s
+       WHERE s.agent = ? AND s.native_id IS NOT NULL AND s.hook_seen_at > ?
+         AND EXISTS (SELECT 1 FROM json_each(s.hook_pids) j WHERE j.value IN (${marks}))
+       ORDER BY s.hook_seen_at DESC LIMIT 1`,
+      this.agent || 'unknown',
+      t - HOOK_LINK_MAX_AGE_MS,
+      ...this.hostKeys,
+    );
+  }
+
+  // Where process ancestry is unknown (Windows), the native session the hook tied to this server directly
+  directSession(t) {
+    return this.db.get(
+      `SELECT * FROM sessions WHERE agent = ? AND native_id IS NOT NULL AND server_pid = ? AND server_start = ? AND hook_seen_at > ?
+       ORDER BY hook_seen_at DESC LIMIT 1`,
+      this.agent || 'unknown',
+      this.serverPid,
+      this.serverStart,
+      t - HOOK_LINK_MAX_AGE_MS,
+    );
+  }
+
+  // Codex runs one Neurons server per thread under the same app-server; background work runs in only one of them, the lowest pid
+  leadsHost() {
+    if (!this.hostKeys.length) return true;
+    const first = this.db.get('SELECT MIN(pid) AS pid FROM servers WHERE agent = ? AND host_key = ? AND last_seen > ?', this.agent || 'unknown', this.hostKeys.at(-1), now() - SERVER_STALE_MS);
+    return !first?.pid || first.pid === this.serverPid;
+  }
+
+  // The session current() would answer for, without writing anything; for background checks that run every second
+  peek() {
+    const t = now();
+    return this.linkedSession(t) || this.directSession(t) || (this.processSessionId && this.db.get('SELECT * FROM sessions WHERE id = ?', this.processSessionId)) || null;
+  }
+
+  // Every open hook-linked session under this window's agent process, the one peek() names first (a Codex app-server hosts several threads)
+  hostSessions() {
+    const first = this.peek();
+    if (!this.hostKeys.length) return first ? [first] : [];
+    const rows = this.db.all(
+      `SELECT s.* FROM sessions s
+       WHERE s.agent = ? AND s.native_id IS NOT NULL AND s.ended_at IS NULL AND s.hook_seen_at > ?
+         AND EXISTS (SELECT 1 FROM json_each(s.hook_pids) j WHERE j.value IN (${this.hostKeys.map(() => '?').join(', ')}))
+       ORDER BY s.hook_seen_at DESC`,
+      this.agent || 'unknown',
+      now() - HOOK_LINK_MAX_AGE_MS,
+      ...this.hostKeys,
+    );
+    return first ? [first, ...rows.filter((s) => s.id !== first.id)] : rows;
   }
 
   current() {
     const db = this.db;
     const agent = this.agent || 'unknown';
     const t = now();
-    if (this.hostKeys.length) {
-      const marks = this.hostKeys.map(() => '?').join(', ');
-      const linked = db.get(
-        `SELECT s.* FROM sessions s
-         WHERE s.agent = ? AND s.native_id IS NOT NULL AND s.hook_seen_at > ?
-           AND EXISTS (SELECT 1 FROM json_each(s.hook_pids) j WHERE j.value IN (${marks}))
-         ORDER BY s.hook_seen_at DESC LIMIT 1`,
-        agent,
-        t - HOOK_LINK_MAX_AGE_MS,
-        ...this.hostKeys,
+    const linked = this.linkedSession(t);
+    if (linked) {
+      db.run(
+        'UPDATE sessions SET server_pid = ?, server_start = ?, client = COALESCE(?, client), last_seen = ?, ended_at = NULL WHERE id = ?',
+        this.serverPid,
+        this.serverStart,
+        this.client,
+        t,
+        linked.id,
       );
-      if (linked) {
-        db.run(
-          'UPDATE sessions SET server_pid = ?, server_start = ?, client = COALESCE(?, client), last_seen = ?, ended_at = NULL WHERE id = ?',
-          this.serverPid,
-          this.serverStart,
-          this.client,
-          t,
-          linked.id,
-        );
-        // A fallback session made before the hook linked us is superseded by the native one
-        if (this.processSessionId && this.processSessionId !== linked.id) {
-          db.run('UPDATE sessions SET ended_at = ? WHERE id = ?', t, this.processSessionId);
-          this.processSessionId = null;
-        }
-        return db.get('SELECT * FROM sessions WHERE id = ?', linked.id);
+      // A fallback session made before the hook linked us is superseded by the native one
+      if (this.processSessionId && this.processSessionId !== linked.id) {
+        db.run('UPDATE sessions SET ended_at = ? WHERE id = ?', t, this.processSessionId);
+        this.processSessionId = null;
       }
+      return db.get('SELECT * FROM sessions WHERE id = ?', linked.id);
     }
-    // Where process ancestry is unknown (Windows) the hook links the native session to this server directly
-    const direct = db.get(
-      `SELECT * FROM sessions WHERE agent = ? AND native_id IS NOT NULL AND server_pid = ? AND server_start = ? AND hook_seen_at > ?
-       ORDER BY hook_seen_at DESC LIMIT 1`,
-      agent,
-      this.serverPid,
-      this.serverStart,
-      t - HOOK_LINK_MAX_AGE_MS,
-    );
+    const direct = this.directSession(t);
     if (direct) {
       db.run('UPDATE sessions SET client = COALESCE(?, client), last_seen = ?, ended_at = NULL WHERE id = ?', this.client, t, direct.id);
       if (this.processSessionId && this.processSessionId !== direct.id) {
@@ -301,25 +356,21 @@ export class Identity {
   registerServer() {
     const t = now();
     this.registered = true;
+    this.surface ??= surfaceOf(this.agent);
     this.db.run(
-      'INSERT OR REPLACE INTO servers (pid, start, agent, client, host_key, cwd, popups, started_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT OR REPLACE INTO servers (pid, start, agent, client, host_key, cwd, surface, started_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       this.serverPid,
       this.serverStart,
       this.agent || 'unknown',
       this.client,
       this.hostKeys.at(-1) ?? null,
       this.cwd,
-      this.popups ? 1 : 0,
+      this.surface,
       t,
       t,
     );
   }
 
-  // A client that advertises popups but answers them before anyone could click is treated as one without them
-  popupsBroken() {
-    this.popups = false;
-    this.db.run('UPDATE servers SET popups = 0 WHERE pid = ? AND start = ?', this.serverPid, this.serverStart);
-  }
 
   // After the machine sleeps, other processes prune this window's row as stale; it comes back here
   heartbeat() {
@@ -345,7 +396,9 @@ export function liveServers(db) {
   const live = [];
   const fresh = now() - SERVER_STALE_MS;
   for (const s of db.all('SELECT * FROM servers')) {
-    if (s.last_seen > fresh && isAlive(s.pid, s.start)) live.push(s);
+    // A known start time pins the process, so a heartbeat late after the machine slept does not end its lines; only
+    // where it is unknown (Windows) does a silent row count as gone
+    if ((s.start || s.last_seen > fresh) && isAlive(s.pid, s.start)) live.push(s);
     else db.run('DELETE FROM servers WHERE pid = ? AND start = ?', s.pid, s.start);
   }
   return live;

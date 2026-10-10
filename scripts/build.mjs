@@ -20,7 +20,7 @@ await build({
   bundle: true,
   platform: 'node',
   format: 'esm',
-  target: 'node22.13',
+  target: 'node22.16',
   // Bundled CommonJS dependencies still call require()
   banner: { js: "import { createRequire as __neuronsRequire } from 'node:module'; const require = __neuronsRequire(import.meta.url);" },
   minifySyntax: true,
@@ -54,6 +54,22 @@ await build({
   legalComments: 'none',
   logLevel: 'info',
 });
+// The dashboard's connection canvas (React Flow), one script and one stylesheet next to the hand-written webview files
+await build({
+  absWorkingDir: ext,
+  entryPoints: { canvas: 'webview-src/canvas.jsx' },
+  outdir: path.join(ext, 'media'),
+  bundle: true,
+  platform: 'browser',
+  format: 'iife',
+  target: 'chrome110',
+  jsx: 'automatic',
+  define: { 'process.env.NODE_ENV': '"production"' },
+  minify: true,
+  legalComments: 'none',
+  logLevel: 'info',
+});
+
 const server = path.join(ext, 'server');
 fs.rmSync(server, { recursive: true, force: true });
 fs.mkdirSync(server);
