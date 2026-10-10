@@ -238,6 +238,42 @@ const MIGRATIONS = [
     raw.prepare("UPDATE messages SET status = 'cancelled' WHERE link_type = 'call' AND status = 'open' AND link_id IN (SELECT id FROM calls WHERE status = 'ringing')").run();
     raw.prepare("UPDATE calls SET status = 'cancelled', ended_by = 'calls no longer ring', ended_at = ? WHERE status = 'ringing'").run(t);
   },
+  // Since when a line has waited for a closed chat to come back (a reload or a shut editor pauses a line, not ends it)
+  (raw) => {
+    if (!raw.prepare("SELECT 1 FROM pragma_table_info('calls') WHERE name = 'paused_at'").get()) raw.exec('ALTER TABLE calls ADD COLUMN paused_at INTEGER');
+  },
+  // The user's choices in the dashboard: providers turned off in Neurons (settings) and each chat's sending mode, plus
+  // the messages of a chat set to Ask first, held until the user allows them
+  (raw) => {
+    if (!raw.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'send_mode'").get()) raw.exec('ALTER TABLE sessions ADD COLUMN send_mode TEXT');
+    raw.exec(`
+      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS asks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        decided_at INTEGER,
+        decided_by TEXT,
+        message_ids TEXT,
+        noticed_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS asks_status ON asks(status);
+    `);
+  },
+  // A Claude chat the user allowed to be woken by a message that reaches it while idle (off until they accept)
+  (raw) => {
+    if (!raw.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'wake'").get()) raw.exec('ALTER TABLE sessions ADD COLUMN wake INTEGER');
+  },
+  // The side of each box a line was drawn from and to (the canvas keeps it), and each chat's role (admin or worker)
+  (raw) => {
+    const has = (table, column) => raw.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?').get(table, column);
+    if (!has('calls', 'from_side')) raw.exec('ALTER TABLE calls ADD COLUMN from_side TEXT');
+    if (!has('calls', 'to_side')) raw.exec('ALTER TABLE calls ADD COLUMN to_side TEXT');
+    if (!has('sessions', 'role')) raw.exec('ALTER TABLE sessions ADD COLUMN role TEXT');
+  },
 ];
 
 // node:sqlite rejects undefined, so absent optional values bind as NULL

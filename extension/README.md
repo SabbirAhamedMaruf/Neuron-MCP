@@ -5,15 +5,16 @@ A dashboard for Neurons MCP, the local server through which coding agents on one
 ## What you get
 
 - **A Neurons icon in the activity bar.** It opens a dashboard in the sidebar. **Open in editor** shows the same dashboard in a full editor tab.
-- **The connection graph** (in an editor tab; the sidebar's Live tab lists chats and opens it). Every open chat is a box in its own color, named by its title, with its model, repo and a small panel of server-style lights: PWR (open), ACT (working), TX and RX (a message sent or received).
-  - Drag a line from one chat to another to connect them; only connected chats can talk.
+- **The connection graph** (in an editor tab; the sidebar's Live tab lists chats and opens it). Every open chat is a box in its own color: its agent's icon and name with a small panel of server-style lights (PWR open, ACT working, TX and RX a message sent or received), the chat's name, its handle and model, and its status with a ⚙.
+  - Drag a line from either side of one chat to another to connect them; it stays on the sides you picked, and a chat can have several lines. Only connected chats can talk.
   - Each message travels along its line as a dot, and both boxes blink.
   - Select a line and press Delete (or its ×) to hang up.
-  - Click a chat to see its lines and open the conversation.
+  - The ⚙ on a chat (or a double-click) opens its info, its lines (open the conversation, hang up) and its settings: its **Role** (none, Admin or Worker), **Automatic** or **Ask first** for its messages, and turning its provider off in Neurons.
+  - **Ask first** messages wait for your OK: a notification in the editor and a card on the graph, each with Allow and Deny.
   - The canvas moves only while you look at it, so it never slows the editor down.
-- **Agents setup.** From the canvas toolbar, each agent's state with **Connect** and **Disconnect**. Connect writes that agent's *global* MCP configuration plus its hooks (a plugin for OpenCode) in one click; Disconnect removes them again.
+- **Agents setup.** From the canvas toolbar, each agent's state with **Connect** and **Disconnect**, plus **Turn off** / **Turn on** in Neurons (the config stays). Connect writes that agent's *global* MCP configuration plus its hooks (a plugin for OpenCode) in one click; Disconnect removes them again.
 - **Conversations.** Every exchange between two chats as a chat view: what Claude asked, what Codex replied, in full. Delete one message or the whole conversation.
-- **Messages for idle agents.** Codex gets them in its chat and answers at once; other agents answer at their next turn.
+- **Messages for idle agents.** Codex gets them in its chat and answers at once. A Claude Code chat does the same once you allow it (⚙ → Wake when a message arrives); otherwise it, like other agents, answers at its next turn.
 - **Search.** The Conversations tab searches every message, and filters by agent or kind; a conversation shows when any of its messages matches. It updates live.
 - **Handoffs, Reviews, Notes and Claims.** Every record Neurons keeps, readable in full and deletable one by one.
 - **Storage.** The database size and counts. You can clear any category, or delete everything. Every bulk delete saves a backup first, and the newest 5 backups are kept.

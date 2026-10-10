@@ -1,11 +1,13 @@
 import { CALL, deliveredAll, localAnswer, localFallback, localUnavailable, localUnknown, noReply } from '../../configuration/prompts.js';
-import { LIMITS, LOCAL_LLM } from '../../configuration/settings.js';
+import { ASK_WAIT_MS, LIMITS, LOCAL_LLM } from '../../configuration/settings.js';
+import { awaitDecision, deliver, openAsk } from '../asks.js';
 import { joinBlocks, section } from '../format.js';
 import { NeuronsError, assertClean, assertLength } from '../guard.js';
 import { resolveTarget } from '../identity.js';
 import { formatMessage, postMessage, waitForReplies } from '../inbox.js';
 import { linesOf, pruneLines, requireLine } from '../lines.js';
 import { askLocal, hasModel, localBase, localModels } from '../local.js';
+import { agentLabel, isAgentOff, sendModeOf } from '../prefs.js';
 
 // The local model's answer, or why there is none: down | missing | unknown | error
 async function tryLocal(question) {
@@ -48,10 +50,16 @@ export default async function send(a, me, { db, extra }) {
 
   // Only lines the user connected carry messages: one line for an agent or a handle, every line for "all"
   if (target.kind !== 'agent' && target.kind !== 'session' && target.kind !== 'all') throw new NeuronsError('Send to "codex", "claude", a handle, "all" (every line) or "local".');
+  const targetAgent = target.kind === 'agent' ? target.target : target.session?.agent;
+  if (isAgentOff(db, targetAgent)) throw new NeuronsError(CALL.peerOff(agentLabel(targetAgent)));
   pruneLines(db);
   const line = target.kind === 'all' ? null : requireLine(db, me, target);
-  const peers = line ? [line.peer] : [...new Map(linesOf(db, me).map((l) => [l.peer.id, l.peer])).values()];
-  if (!peers.length) throw new NeuronsError(CALL.notConnected('any chat'));
+  const all = line ? [] : linesOf(db, me);
+  // "all" asks every chat on a line that is open now; one whose chat closed is named instead
+  const closed = [...new Set(all.filter((l) => l.paused_at).map((l) => l.peer.handle))];
+  const routes = line ? [{ peer: line.peer, lineId: line.id }] : [...new Map(all.filter((l) => !l.paused_at).map((l) => [l.peer.id, { peer: l.peer, lineId: l.id }])).values()];
+  const peers = routes.map((r) => r.peer);
+  if (!peers.length) throw new NeuronsError(closed.length ? CALL.peerClosed(closed.join(', ')) : CALL.notConnected('any chat'));
 
   let fallback = null;
   if (a.local_first && kind === 'question') {
@@ -61,20 +69,25 @@ export default async function send(a, me, { db, extra }) {
   }
 
   const message = { from: me.id, kind, subject: a.subject, body: a.body, repo: a.repo || me.repo, refs: a.refs };
+  const skipped = closed.length ? CALL.skippedClosed(closed) : null;
+
+  // Ask first (the user's setting for this chat): the message waits for their OK in the editor and goes once if allowed
+  if (sendModeOf(me) === 'ask') {
+    const { from, ...held } = message;
+    const decided = await awaitDecision(db, openAsk(db, me, held, routes), extra?.signal);
+    if (decided.status === 'denied') throw new NeuronsError(CALL.askDenied);
+    if (decided.status === 'expired') throw new NeuronsError(CALL.askExpired(ASK_WAIT_MS / 1000));
+    if (decided.status !== 'allowed') throw new NeuronsError(CALL.askCancelled);
+    const sent = JSON.parse(decided.message_ids);
+    return withReplies(db, me, joinBlocks(CALL.askAllowed(sent), skipped, fallback), sent.map((s) => s.id), a, extra);
+  }
+
   if (line) {
     const id = postMessage(db, { ...message, toKind: 'session', toTarget: line.peer.id });
     return withReplies(db, me, joinBlocks(CALL.overLine(id, line.peer.handle, line.id), fallback), [id], a, extra);
   }
 
   // Second opinion: one message per connected chat, grouped so the inbox shows the answers together
-  const sent = db.tx(() => {
-    const out = [];
-    for (const peer of peers) {
-      const id = postMessage(db, { ...message, toKind: 'session', toTarget: peer.id, linkType: 'group', linkId: out[0]?.id ?? null });
-      if (!out.length) db.run('UPDATE messages SET link_id = ? WHERE id = ?', id, id);
-      out.push({ id, handle: peer.handle });
-    }
-    return out;
-  });
-  return withReplies(db, me, joinBlocks(deliveredAll(sent), fallback), sent.map((s) => s.id), a, extra);
+  const sent = db.tx(() => deliver(db, message, peers, true));
+  return withReplies(db, me, joinBlocks(deliveredAll(sent), skipped, fallback), sent.map((s) => s.id), a, extra);
 }

@@ -12,6 +12,7 @@ import { HANDOFF_SELECT } from '../src/handoffs.js';
 import { ancestorKeys, connectionCheck, linkSessionToServer, liveServers, normalizeAgent, upsertNativeSession } from '../src/identity.js';
 import { handOver } from '../src/delivery.js';
 import { inboxRows, unreadCount } from '../src/inbox.js';
+import { isAgentOff } from '../src/prefs.js';
 import { readTail } from '../src/native/common.js';
 import { recordEdits, snapshotSession } from '../src/snapshot.js';
 import { ago, now, oneLine } from '../src/util.js';
@@ -140,6 +141,8 @@ async function hook() {
   const input = JSON.parse(raw);
   if (!input.session_id) return quiet(agent);
   const db = openDb();
+  // A provider the user turned off in the dashboard: its hooks do nothing
+  if (isAgentOff(db, agent)) return quiet(agent);
   const event = input.hook_event_name;
   if (event === 'PreToolUse') return guardEdit(db, agent, input);
   if (AFTER_TOOL.has(event)) return afterTool(db, agent, input);
@@ -158,7 +161,7 @@ async function hook() {
   if (event === 'Register') return quiet(agent);
   const lines = [];
   if (event === 'SessionStart') {
-    lines.push(HOOK.sessionStart(me.handle));
+    lines.push(HOOK.sessionStart(me.handle, me.role));
     // Other sessions' automatic handoffs in this repo, so a new session knows what is in flight
     if (me.repo) {
       const recent = db.all(
@@ -196,7 +199,7 @@ function status() {
   pruneLines(db);
   const lines = db.all(`${LINE_SELECT} WHERE c.status = 'connected' ORDER BY c.id`);
   console.log(`\nLines (${lines.length}):`);
-  for (const c of lines) console.log(`  #${c.id} ${c.from_handle} ⇄ ${c.answer_handle} (${ago(c.answered_at)})`);
+  for (const c of lines) console.log(`  #${c.id} ${c.from_handle} ⇄ ${c.answer_handle} (${c.paused_at ? `paused ${ago(c.paused_at)}, a chat is closed` : ago(c.answered_at)})`);
   const counts = db.get(
     "SELECT (SELECT COUNT(*) FROM memories WHERE status = 'active') AS memories, (SELECT COUNT(*) FROM handoffs) AS handoffs, (SELECT COUNT(*) FROM reviews) AS reviews, (SELECT COUNT(*) FROM messages) AS messages",
   );
@@ -287,7 +290,7 @@ async function watch() {
  * `--once <cmd>` prints one answer and exits, for scripts and debugging.
  */
 // Dashboard commands that change the store
-const WRITES = new Set(['link', 'hangup', 'delete', 'clear']);
+const WRITES = new Set(['link', 'hangup', 'delete', 'clear', 'sendMode', 'wake', 'role', 'agentOff', 'decideAsk']);
 
 async function dashboard() {
   const db = openDb();

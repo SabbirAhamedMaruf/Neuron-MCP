@@ -13,6 +13,7 @@ const KNOWN_AGENTS = [
   [/gemini/i, 'gemini'],
   [/opencode/i, 'opencode'],
   [/lm ?studio/i, 'lmstudio'],
+  [/ollama/i, 'ollama'],
   [/cursor/i, 'cursor'],
   [/copilot/i, 'copilot'],
   [/windsurf|codeium/i, 'windsurf'],

@@ -1,6 +1,6 @@
 {
   "name": "neurons-mcp",
-  "version": "0.16.4",
+  "version": "0.16.15",
   "author": {
     "name": "Sabbir Ahamed Maruf"
   },
@@ -20,6 +20,7 @@
     "start": "node dist/neurons-mcp.mjs"
   },
   "devDependencies": {
+    "@hugeicons/core-free-icons": "^4.3.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vscode/vsce": "^4.0.0",
     "@xyflow/react": "^12.12.0",

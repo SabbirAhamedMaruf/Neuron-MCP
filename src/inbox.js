@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { INBOX_HINTS, opinionsHeader } from '../configuration/prompts.js';
+import { INBOX_HINTS, ROLE, opinionsHeader } from '../configuration/prompts.js';
 import { BROADCAST_TTL_MS, LIMITS, OUTPUT, WAIT_POLL_MS } from '../configuration/settings.js';
 import { ago, clip, now, oneLine, parseJson } from './util.js';
 
@@ -83,12 +83,22 @@ export function postMessage(db, { from, toKind, toTarget, kind, subject, body, r
   return Number(res.lastInsertRowid);
 }
 
+// Between an admin and its worker (roles the user set), what the message is to the chat reading it
+function roleTag(db, m) {
+  if (m.to_kind !== 'session') return null;
+  const from = db.get('SELECT role FROM sessions WHERE id = ?', m.from_session)?.role;
+  const to = db.get('SELECT role FROM sessions WHERE id = ?', m.to_target)?.role;
+  if (from === 'admin' && to === 'worker') return ROLE.fromAdmin;
+  if (from === 'worker' && to === 'admin') return ROLE.fromWorker;
+  return null;
+}
+
 export function formatMessage(db, m) {
   const call = m.link_type === 'call' ? ` · line #${m.link_id}` : '';
   const head = `#${m.id} ${m.kind} from ${m.from_handle}${m.reply_to ? ` re #${m.reply_to}` : ''}${call} · ${ago(m.created_at)}${m.subject ? ` · ${m.subject}` : ''}`;
   const refs = parseJson(m.refs, []);
   const hint = INBOX_HINTS[m.kind];
-  return [head, clip(m.body, OUTPUT.messageBodyChars), refs.length ? `refs: ${refs.join(', ')}` : null, hint ? hint(m) : null].filter(Boolean).join('\n');
+  return [head, roleTag(db, m), clip(m.body, OUTPUT.messageBodyChars), refs.length ? `refs: ${refs.join(', ')}` : null, hint ? hint(m) : null].filter(Boolean).join('\n');
 }
 
 /*

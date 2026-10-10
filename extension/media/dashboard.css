@@ -6,6 +6,8 @@
   --agent-codex: var(--vscode-charts-green);
   --agent-gemini: var(--vscode-charts-blue);
   --agent-opencode: var(--vscode-charts-purple);
+  --agent-ollama: var(--vscode-foreground);
+  --agent-lmstudio: var(--vscode-terminal-ansiMagenta, var(--vscode-charts-red));
   --agent-other: var(--vscode-charts-yellow);
   --border: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
 }
@@ -368,13 +370,39 @@ button:focus-visible {
   --agent-color: var(--agent-opencode);
 }
 
+.agent-ollama {
+  --agent-color: var(--agent-ollama);
+}
+
+.agent-lmstudio {
+  --agent-color: var(--agent-lmstudio);
+}
+
 .agent-other {
   --agent-color: var(--agent-other);
 }
 
 .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--agent-color);
   font-weight: 600;
+}
+
+/* An agent's mark (or a robot for any other agent), drawn in its agent color */
+.agent-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--agent-color);
+}
+
+.chat-row > .agent-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--agent-color) 14%, transparent);
 }
 
 .arrow {
@@ -525,6 +553,8 @@ button:focus-visible {
 .badge.agent-codex,
 .badge.agent-gemini,
 .badge.agent-opencode,
+.badge.agent-ollama,
+.badge.agent-lmstudio,
 .badge.agent-other {
   border-color: var(--agent-color);
   color: var(--agent-color);
@@ -752,6 +782,12 @@ body.vscode-high-contrast-light .chat-dot {
   max-width: 34%;
 }
 
+/* A line waiting for its closed chat to be reopened */
+.line-row.paused {
+  opacity: 0.6;
+  border-bottom-style: dashed;
+}
+
 .chat-state {
   flex: none;
   font-size: 0.85em;
@@ -760,4 +796,18 @@ body.vscode-high-contrast-light .chat-dot {
 
 .chat-state.busy {
   color: var(--vscode-charts-yellow);
+}
+
+/* Ask first: a message waiting for the user's OK */
+.ask-row {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow)) 50%, var(--border));
+}
+
+.ask-text {
+  margin-top: 4px;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
 }

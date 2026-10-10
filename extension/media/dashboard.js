@@ -3,7 +3,7 @@
 (function () {
   const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
 
-  const KNOWN_AGENTS = ['claude', 'codex', 'gemini', 'opencode'];
+  const KNOWN_AGENTS = ['claude', 'codex', 'gemini', 'opencode', 'ollama', 'lmstudio'];
   const KINDS = ['question', 'reply', 'note', 'proposal', 'review', 'review-result', 'handoff'];
   const TABS = [
     ['live', 'Live'],
@@ -51,7 +51,9 @@
   }
 
   const agentClass = (a) => (KNOWN_AGENTS.includes(a) ? `agent-${a}` : 'agent-other');
-  const who = (handle, agent) => `<span class="who ${agentClass(agent)}">${esc(handle || agent || 'unknown')}</span>`;
+  // The canvas bundle's agent icon: the agent's own mark, or a robot for any other agent
+  const agentIcon = (agent) => `<span class="agent-icon ${agentClass(agent)}">${window.NeuronsCanvas?.icon(agent, 12) || ''}</span>`;
+  const who = (handle, agent) => `<span class="who ${agentClass(agent)}">${agentIcon(agent)}${esc(handle || agent || 'unknown')}</span>`;
   const button = (label, act, data = {}, cls = '') =>
     `<button class="btn ${cls}" data-act="${esc(act)}"${Object.entries(data)
       .map(([k, v]) => ` data-${k}="${esc(v)}"`)
@@ -87,6 +89,7 @@
     live(graph, hues, now) {
       const nodes = graph?.nodes || [];
       const lines = graph?.lines || [];
+      const paused = graph?.paused || [];
       const byId = new Map(nodes.map((n) => [n.id, n]));
       const dot = (id) => `<span class="chat-dot" data-hue="${esc(hues[id] ?? 210)}"></span>`;
       const name = (n) => esc(n?.title || n?.handle || 'a closed chat');
@@ -94,28 +97,43 @@
       const chats = nodes.length
         ? nodes
             .map(
-              (n) => `<div class="chat-row">${dot(n.id)}<div class="chat-main"><div class="chat-title">${name(n)}</div><div class="muted small">${esc(n.handle)} · ${esc(n.model || n.agent)}</div></div><span class="chat-state ${n.busy ? 'busy' : ''}">${n.busy ? 'Working' : 'Idle'}</span></div>`,
+              (n) => `<div class="chat-row">${dot(n.id)}${agentIcon(n.agent)}<div class="chat-main"><div class="chat-title">${name(n)}</div><div class="muted small">${esc(n.handle)} · ${esc(n.model || n.agent)}</div></div><span class="chat-state ${n.busy ? 'busy' : ''}">${n.busy ? 'Working' : 'Idle'}</span></div>`,
             )
             .join('')
         : empty('No chats yet. Each Claude Code or Codex chat appears here once it starts.');
-      const rows = lines.length
+      // A paused line waits for its closed chat to be reopened, and ends on its own after a day
+      const waiting = (p) => `<div class="chat-row line-row paused" title="A chat on this line is closed. Reopen that same chat and the line is back."><span class="chat-title">${esc(p.ends[0])}</span><span class="arrow">⇄</span><span class="chat-title">${esc(p.ends[1])}</span><span class="spacer"></span><span class="time">paused · ends in ${Math.max(1, Math.ceil((p.until - now) / 3600000))}h</span></div>`;
+      const rows = lines.length || paused.length
         ? lines
             .map((l) => `<div class="chat-row line-row">${dot(l.source)}<span class="chat-title">${name(byId.get(l.source))}</span><span class="arrow">⇄</span>${dot(l.target)}<span class="chat-title">${name(byId.get(l.target))}</span><span class="spacer"></span><span class="time">${esc(l.messages)} msg${l.last ? ` · ${esc(ago(l.last.at, now))}` : ''}</span></div>`)
-            .join('')
+            .join('') + paused.map(waiting).join('')
         : empty('No lines yet.');
-      return `${open}${section(`Chats (${nodes.length})`, chats)}${section(`Lines (${lines.length})`, rows)}`;
+      // Ask first: messages waiting for the user's OK (the editor shows a notification too; either answer counts)
+      const asks = (graph?.asks || []).filter((a) => a.expiresAt > now);
+      const pending = asks.length
+        ? section(
+            `Waiting for your OK (${asks.length})`,
+            asks
+              .map((a) => `<div class="ask-row"><div>${who(a.from, a.fromAgent)} <span class="muted">wants to send ${esc(a.to.join(', '))} a ${esc(a.kind)}</span></div><div class="ask-text">${esc(a.text)}</div><div class="row">${button('Allow', 'ask', { id: a.id, allow: 1 }, 'primary')}${button('Deny', 'ask', { id: a.id, allow: 0 }, 'secondary')}</div></div>`)
+              .join(''),
+          )
+        : '';
+      return `${pending}${open}${section(`Chats (${nodes.length})`, chats)}${section(`Lines (${lines.length + paused.length})`, rows)}`;
     },
 
     // The Agents setup drawer on the canvas: each agent's Neurons config, with Connect / Disconnect
-    agents(agents, graph) {
+    agents(agents, graph, off = []) {
       if (!agents) return empty('Looking for agents…');
       const running = (id) => (graph?.nodes || []).filter((n) => n.agent === id).length;
       return agents
         .map((a) => {
-          const state = V.agentState(a);
+          // A provider the user turned off in Neurons keeps its config; it only needs turning back on
+          const state = off.includes(a.id)
+            ? { text: 'Turned off in Neurons: its chats are not on the graph and get no messages.', cls: 'muted', actions: [['Turn on', 'agentOn', '']] }
+            : (({ actions, ...rest }) => ({ ...rest, actions: a.registered ? [...actions, ['Turn off', 'agentOff', 'secondary']] : actions }))(V.agentState(a));
           const n = running(a.id);
           return `<div class="agent ${agentClass(a.id)}">
-  <div class="agent-head"><span class="dot ${n ? 'on' : ''}"></span><b>${esc(a.name)}</b><span class="muted">${n ? `${n} chat${n === 1 ? '' : 's'} open` : 'no chat open'}</span></div>
+  <div class="agent-head"><span class="dot ${n ? 'on' : ''}"></span>${agentIcon(a.id)}<b>${esc(a.name)}</b><span class="muted">${n ? `${n} chat${n === 1 ? '' : 's'} open` : 'no chat open'}</span></div>
   <div class="agent-state ${state.cls}">${esc(state.text)}</div>
   ${a.id === 'codex' && a.connected ? `<div class="hint">Codex runs new hooks only after you trust them: open <code>/hooks</code> in Codex once.</div>` : ''}
   <div class="row">${state.actions.map(([label, act, cls]) => button(label, act, { id: a.id }, cls)).join('')}</div>
@@ -360,8 +378,8 @@ ${section('Backups', kept ? `<table class="counts">${kept}</table>` : empty('No 
     // The canvas (React Flow, media/canvas.js) is mounted once and fed each snapshot; it talks back through this bridge
     let canvas = null;
     const canvasApi = {
-      link: (from, to) =>
-        rpc('link', { from, to })
+      link: (from, to, fromSide, toSide) =>
+        rpc('link', { from, to, fromSide, toSide })
           .then(load)
           .catch((err) => toast(err.message, true)),
       hangup: (line) =>
@@ -376,6 +394,33 @@ ${section('Backups', kept ? `<table class="counts">${kept}</table>` : empty('No 
         renderContent();
         load();
       },
+      // A chat's ⚙ settings, a provider turned off or on, and the user's answer to an Ask first message
+      sendMode: (id, mode) =>
+        rpc('sendMode', { id, mode })
+          .then(load)
+          .catch((err) => toast(err.message, true)),
+      role: (id, role) =>
+        rpc('role', { id, role })
+          .then(load)
+          .catch((err) => toast(err.message, true)),
+      wake: (id, on) =>
+        rpc('wake', { id, on })
+          .then(load)
+          .catch((err) => toast(err.message, true)),
+      agentOff: (agent, off) =>
+        rpc('agentOff', { agent, off })
+          .then((r) => {
+            toast(off ? `Turned off in Neurons${r?.ended ? `; ${r.ended} line(s) ended` : ''}. Turn it back on in Agents setup.` : 'Turned on in Neurons.');
+            return load();
+          })
+          .catch((err) => toast(err.message, true)),
+      decideAsk: (id, allow) =>
+        rpc('decideAsk', { id, allow, by: 'dashboard' })
+          .then((r) => {
+            if (r?.status !== (allow ? 'allowed' : 'denied')) toast(`That message was already ${r?.status === 'cancelled' ? 'dropped (its line ended)' : r?.status}.`, true);
+            return load();
+          })
+          .catch((err) => toast(err.message, true)),
       toggleAgents: () => {
         S.agentsOpen = !S.agentsOpen;
         renderContent();
@@ -393,7 +438,7 @@ ${section('Backups', kept ? `<table class="counts">${kept}</table>` : empty('No 
       if (S.snap) canvas?.update({ ...S.snap, detected: S.detected || [] });
       const drawer = $('agents-drawer');
       drawer.hidden = !S.agentsOpen;
-      if (S.agentsOpen) drawer.innerHTML = `<div class="drawer-head"><b>Agents setup</b><span class="spacer"></span>${button('Close', 'agents', {}, 'link')}</div>${V.agents(S.agents, S.snap?.graph)}`;
+      if (S.agentsOpen) drawer.innerHTML = `<div class="drawer-head"><b>Agents setup</b><span class="spacer"></span>${button('Close', 'agents', {}, 'link')}</div>${V.agents(S.agents, S.snap?.graph, S.snap?.settings?.disabledAgents)}`;
     }
 
     // Colors set through the CSSOM: the page's CSP forbids style attributes in markup
@@ -418,7 +463,7 @@ ${section('Backups', kept ? `<table class="counts">${kept}</table>` : empty('No 
       if (S.tab === 'live') {
         const graph = S.snap?.graph;
         const hues = window.NeuronsCanvas?.hues([...(graph?.nodes || []).map((n) => n.id)]) || {};
-        html = V.live(graph, hues, now) + section('Agents', V.agents(S.agents, graph));
+        html = V.live(graph, hues, now) + section('Agents', V.agents(S.agents, graph, S.snap?.settings?.disabledAgents));
       } else if (S.tab === 'conversations') html = V.conversations(S.convos, S.convo, S.full, now, !!(S.filters.q || S.filters.agent || S.filters.kind));
       else if (S.tab === 'handoffs') html = V.handoffs(S.handoffs, S.open, now);
       else if (S.tab === 'reviews') html = V.reviews(S.reviews, S.open, now);
@@ -542,6 +587,11 @@ ${section('Backups', kept ? `<table class="counts">${kept}</table>` : empty('No 
           return load();
         }
         if (action === 'agents') return canvasApi.toggleAgents();
+        if (action === 'ask') return canvasApi.decideAsk(num, el.dataset.allow === '1');
+        if (action === 'agentOff' || action === 'agentOn') {
+          el.disabled = true;
+          return canvasApi.agentOff(id, action === 'agentOff');
+        }
         if (action === 'connect' || action === 'disconnect') {
           el.disabled = true;
           S.agents = await rpc(action, { id: el.dataset.id });

@@ -1,7 +1,8 @@
-import { unreadBanner } from '../configuration/prompts.js';
+import { CALL, unreadBanner } from '../configuration/prompts.js';
 import { TOOLS } from '../configuration/tools/index.js';
 import { NeuronsError, redact } from './guard.js';
 import { unreadCount } from './inbox.js';
+import { agentLabel, isAgentOff } from './prefs.js';
 import { HANDLERS } from './tools/index.js';
 
 export const log = (...args) => console.error('[neurons]', ...args);
@@ -34,6 +35,8 @@ export function registerTools(server, db, identity) {
           // A tool call proves this window is alive, even if a sleep made its row look stale
           identity.heartbeat();
           const me = identity.current();
+          // A provider the user turned off in the dashboard gets no Neurons at all
+          if (isAgentOff(db, me.agent)) throw new NeuronsError(CALL.agentOff(agentLabel(me.agent)));
           let text = await handler(args, me, { db, identity, extra });
           if (banner) {
             const n = unreadCount(db, me);

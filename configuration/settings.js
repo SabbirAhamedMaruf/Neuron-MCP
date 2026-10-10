@@ -82,6 +82,12 @@ export const SESSION_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 // Hook-linked sessions older than this are no longer matched to a running server
 export const HOOK_LINK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+// A line whose chat closed (its window reloaded, the editor shut) waits this long for that same chat to come back, then ends
+export const LINE_PAUSE_MS = 24 * 60 * 60 * 1000;
+
+// Ask first: how long a message waits for the user's OK before nothing is sent (under Codex's 60 s tool timeout)
+export const ASK_WAIT_MS = 45 * 1000;
+
 // Poll interval for `inbox` and `send` with wait_seconds
 export const WAIT_POLL_MS = 1000;
 

@@ -1,6 +1,8 @@
 import { CALL } from '../configuration/prompts.js';
+import { LINE_PAUSE_MS } from '../configuration/settings.js';
 import { NeuronsError } from './guard.js';
 import { connectionCheck } from './identity.js';
+import { agentLabel, isAgentOff } from './prefs.js';
 import { now } from './util.js';
 
 /*
@@ -9,10 +11,12 @@ import { now } from './util.js';
  *
  *   dashboard: claude-a ──drag──► codex-b  ──► line #7: claude-a ⇄ codex-b
  *   "codex" from claude-a (and "claude" from codex-b) now means that one session; its handle works too
- *   either side (`disconnect`), the dashboard or the CLI hangs up; a closed window or a cleared chat ends its lines
+ *   either side (`disconnect`), the dashboard or the CLI hangs up; a cleared chat ends its lines
+ *   a closed chat (window reloaded, editor shut) pauses them: the same chat reopened (same handle) is back on its lines,
+ *   one not back within LINE_PAUSE_MS ends them
  *
- * A line is a row of the calls table, connected → ended. Rows of the older ringing design end as missed, declined or
- * cancelled and are never reopened.
+ * A line is a row of the calls table, connected → ended (paused_at set while an end is closed). Rows of the older
+ * ringing design end as missed, declined or cancelled and are never reopened.
  */
 export const LINE_SELECT = `SELECT c.*, f.handle AS from_handle, f.agent AS from_agent, a.handle AS answer_handle, a.agent AS answer_agent
   FROM calls c JOIN sessions f ON f.id = c.from_session LEFT JOIN sessions a ON a.id = c.answered_by`;
@@ -32,11 +36,11 @@ export const hangUp = (db, line, by) => line.status === 'connected' && endLine(d
 // A Codex app-server and an OpenCode server host several threads that all stay open.
 const ONE_CHAT_PER_WINDOW = new Set(['claude', 'gemini']);
 
-// Why a line's end is gone: its window closed, or (one chat per window) a newer chat replaced it; null while it is there
+// Why a line's end is gone for good: the chat no longer exists, or (one chat per window) a newer chat replaced it; null
+// while it is there or only closed
 function goneReason(db, s, isLive) {
-  if (!s) return 'a closed window';
-  if (!isLive(s)) return `${s.handle} closing its window`;
-  if (!ONE_CHAT_PER_WINDOW.has(s.agent) || !s.server_pid) return null;
+  if (!s) return 'a deleted chat';
+  if (!isLive(s) || !ONE_CHAT_PER_WINDOW.has(s.agent) || !s.server_pid) return null;
   const newer = db.get(
     'SELECT 1 FROM sessions WHERE server_pid = ? AND server_start = ? AND agent = ? AND id != ? AND ended_at IS NULL AND COALESCE(hook_seen_at, created_at) > ? LIMIT 1',
     s.server_pid,
@@ -48,14 +52,28 @@ function goneReason(db, s, isLive) {
   return newer ? `${s.handle} leaving its chat` : null;
 }
 
-// A line whose end closed its window or left its chat is over
+// A line whose end left its chat is over; one whose end closed is paused until that chat is back, or over after LINE_PAUSE_MS
 export function pruneLines(db, isLive = null) {
   const lines = db.all("SELECT * FROM calls WHERE status = 'connected'");
   if (!lines.length) return;
   isLive ||= connectionCheck(db);
+  const t = now();
   for (const c of lines) {
-    const why = [c.from_session, c.answered_by].map((id) => goneReason(db, sessionById(db, id), isLive)).find(Boolean);
-    if (why) endLine(db, c, why);
+    const ends = [c.from_session, c.answered_by].map((id) => sessionById(db, id));
+    const why = ends.map((s) => goneReason(db, s, isLive)).find(Boolean);
+    if (why) {
+      endLine(db, c, why);
+      continue;
+    }
+    const closed = ends.filter((s) => !isLive(s));
+    if (!closed.length) {
+      if (c.paused_at) db.run('UPDATE calls SET paused_at = NULL WHERE id = ?', c.id);
+      continue;
+    }
+    // Paused since the chat closed (its server stamps ended_at on the way out), else since it was first seen closed
+    const since = c.paused_at ?? Math.min(t, ...closed.map((s) => s.ended_at || t));
+    if (t - since > LINE_PAUSE_MS) endLine(db, c, `${closed[0].handle} not reopened within a day`);
+    else if (!c.paused_at) db.run('UPDATE calls SET paused_at = ? WHERE id = ?', since, c.id);
   }
 }
 
@@ -74,20 +92,29 @@ function lineFor(db, me, target) {
   // Lines made twice between the same two sessions (older data) are one line to talk on: the oldest
   const seen = new Set();
   const lines = matching.filter((l) => !seen.has(l.peer.id) && seen.add(l.peer.id));
-  if (lines.length > 1) throw new NeuronsError(CALL.ambiguous(lines.map((l) => l.peer.handle)));
-  return lines[0] || null;
+  // A paused line (its chat closed) yields to an open one to the same agent
+  const open = lines.filter((l) => !l.paused_at);
+  const pick = open.length ? open : lines;
+  if (pick.length > 1) throw new NeuronsError(CALL.ambiguous(pick.map((l) => l.peer.handle)));
+  return pick[0] || null;
 }
 
-// The line a message must travel on; without one, the agent is told to ask the user to connect it
+// The line a message must travel on; without one, the agent is told to ask the user to connect it, and a closed chat
+// on the other end is not written to
 export function requireLine(db, me, target) {
   const line = lineFor(db, me, target);
   if (!line) throw new NeuronsError(CALL.notConnected(target.kind === 'agent' ? target.target : target.label));
+  if (line.paused_at) throw new NeuronsError(CALL.peerClosed(line.peer.handle));
   return line;
 }
 
-// Handoffs and reviews to an agent go to the session on the line when there is one
+// Handoffs and reviews to an agent go to the session on the line when there is one, never past it to a closed chat or
+// to a provider the user turned off
 export function overLine(db, me, target) {
+  const agent = target.kind === 'agent' ? target.target : target.session?.agent;
+  if (isAgentOff(db, agent)) throw new NeuronsError(CALL.peerOff(agentLabel(agent)));
   const line = lineFor(db, me, target);
+  if (line?.paused_at) throw new NeuronsError(CALL.peerClosed(line.peer.handle));
   return line ? { kind: 'session', target: line.peer.id, label: `${line.peer.handle} (line #${line.id})`, session: line.peer } : target;
 }
 
@@ -102,12 +129,17 @@ export function newestPerWindow(rows) {
   return [...byWindow.values()];
 }
 
-// The user connects two chats (from the dashboard); an existing line between them is returned instead of a second one
-export function openLine(db, fromId, toId, how = 'dashboard') {
+// The box sides a line can start and end at on the canvas
+const SIDES = new Set(['l', 'r']);
+
+// The user connects two chats (from the dashboard), from the box side they dragged to the one they dropped on; an
+// existing line between them is returned instead of a second one
+export function openLine(db, fromId, toId, how = 'dashboard', { fromSide = null, toSide = null } = {}) {
   if (fromId === toId) throw new NeuronsError('A chat cannot be connected to itself.');
   const isLive = connectionCheck(db);
   const [a, b] = [sessionById(db, fromId), sessionById(db, toId)];
   if (!a || !b || !isLive(a) || !isLive(b)) throw new NeuronsError('Both chats must be open to connect them.');
+  for (const s of [a, b]) if (isAgentOff(db, s.agent)) throw new NeuronsError(`${agentLabel(s.agent)} is turned off in Neurons; turn it on in Agents setup first.`);
   const id = db.tx(() => {
     const existing = db.get(
       "SELECT id FROM calls WHERE status = 'connected' AND ((from_session = ? AND answered_by = ?) OR (from_session = ? AND answered_by = ?))",
@@ -120,13 +152,15 @@ export function openLine(db, fromId, toId, how = 'dashboard') {
     const t = now();
     return Number(
       db.run(
-        "INSERT INTO calls (from_session, to_kind, to_target, status, answered_by, answered_how, created_at, answered_at) VALUES (?, 'session', ?, 'connected', ?, ?, ?, ?)",
+        "INSERT INTO calls (from_session, to_kind, to_target, status, answered_by, answered_how, created_at, answered_at, from_side, to_side) VALUES (?, 'session', ?, 'connected', ?, ?, ?, ?, ?, ?)",
         a.id,
         b.id,
         b.id,
         how,
         t,
         t,
+        SIDES.has(fromSide) ? fromSide : null,
+        SIDES.has(toSide) ? toSide : null,
       ).lastInsertRowid,
     );
   });

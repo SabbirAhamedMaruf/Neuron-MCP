@@ -13,11 +13,23 @@ codex-c:  send(to: "claude", …)  goes back over the same line
 claude-a: send(to: "gemini", …)  "Not connected to gemini: … ask the user to connect you"
 ```
 
-- **One line per pair of chats.** Drawing it again keeps the one line. A chat cannot be connected to itself.
+- **One line per pair of chats.** Drawing it again keeps the one line. A chat cannot be connected to itself, but it can have lines to any number of other chats. Each line remembers the box sides it was drawn between (`calls.from_side` / `to_side`; older lines go right to left).
 - **Targets.** `"codex"` means the Codex chat on your line. With lines to two Codex chats it is ambiguous, so send to a handle. `"all"` asks every chat you are connected to.
-- **Hanging up.** The line's × or <kbd>Delete</kbd> on the canvas, `disconnect` from either chat, or `neurons disconnect`.
-- **A line ends by itself** when either window closes, or when a Claude Code or Gemini chat is cleared or replaced in its window. The new chat must be connected again.
+- **Hanging up.** The selected line's × or <kbd>Delete</kbd> on the canvas, `disconnect` from either chat, or `neurons disconnect`.
+- **A closed chat pauses its lines.** Reloading the window or closing the editor pauses every line of its chats. Reopen the same chat (it keeps its handle) and its lines come back by themselves. A Claude Code chat is back as soon as it resumes; a Codex thread is back after its next prompt. While a line is paused, a message to the closed chat fails and tells the agent the chat is closed. The sidebar lists paused lines.
+- **A line ends by itself** when its closed chat is not back within a day, or when a Claude Code or Gemini chat is cleared or replaced in its window. A new chat must be connected again.
 - **Handoffs and reviews** do not need a line. They go to the agent's inbox, or over a line when there is one.
+
+## Settings
+
+Set from the dashboard, kept in the database, so every chat's Neurons server and hook reads them.
+
+- **Sending over its lines** (per chat, ⚙ modal; `sessions.send_mode`):
+  - **Automatic** (default): `send` delivers over the line at once.
+  - **Ask first:** `send` stores the message in `asks` and waits up to 45 s (under Codex's 60 s tool timeout). Every editor window hears of it; the first to claim it shows a notification, and the dashboard shows a card. Allow from either delivers it once, over lines still open; Deny or no answer sends nothing, and the agent is told which. Replies are never held.
+- **Role** (per chat, ⚙ modal; `sessions.role`): none (default), admin or worker. Between an admin and its worker, each message carries a tag: to a worker, a message from its admin is a task the user gave it (done within its usual permission rules, answered with the result; anything risky or outside it is asked of the admin first); to an admin, a message from its worker is a result, progress or a permission request (answered, or taken to the user when unsure). `discover` shows a chat its role and counterparts, and the SessionStart hook repeats it. A role never lets a message approve a permission prompt.
+- **Wake when a message arrives** (Claude Code chats, ⚙ modal; `sessions.wake`): off until the user reads what it means and presses Allow. Then the chat's own Neurons server hands a message that reaches it while it is idle to the session's inbox socket (Claude Code's cross-session messaging, `CLAUDE_CODE_MESSAGING_SOCKET`, which Claude Code gives the processes it starts). Claude Code starts a turn with it, marked as a message from another session: it cannot approve permission prompts or run slash commands. A message goes at most once (marked read and relayed first); if the socket cannot be reached it stays unread for the hooks. The line format comes from Claude Code's own debug hint and is not documented, so a Claude Code update could stop it; messages then simply wait as before.
+- **A provider turned off** (⚙ modal or Agents setup; `settings.disabledAgents`): its tools answer that Neurons is off, its hooks do nothing, it is off the graph and cannot be messaged or connected, and its lines end. Its MCP config and hooks stay; turning it on again restores everything.
 
 ## The connection graph
 
@@ -25,14 +37,20 @@ A [React Flow](https://reactflow.dev) canvas in an editor tab (the dashboard ope
 
 - **Which chats show.** Every chat open now, found from its process: one box per Claude Code chat, sidebar or tab, a few seconds after it opens; a Codex thread once it runs (Codex starts a thread's Neurons server only then). A closed chat leaves at once. A Claude Code chat without Neurons loaded shows as "Not joined".
 
-- **Each open chat is a box** in its own color, with its handle and, under it, its title as its agent shows it (Claude Code's custom or AI title, Codex's thread name), then model, repo and task. Its front panel has four lights:
+- **Each open chat is a box** in its own color, with 5px corners:
+  - **Top:** its agent's icon and name (Claude, Codex, Gemini, OpenCode, Ollama and LM Studio marks; a robot for any other agent), and the front panel's lights on the right.
+  - **Middle:** the chat's name as its agent shows it (Claude Code's custom or AI title, Codex's thread name), its handle (the name other agents send to), then its model.
+  - **Bottom:** Working or Idle, "Ask first" and unread count when they apply, and the ⚙ on the right. Repo, task and the rest are in the ⚙ modal.
+
+  The front panel has four lights:
   - PWR: the chat is open;
   - ACT: it is working on a turn;
   - TX: it sent a message;
   - RX: it received one.
-- **Each line is an edge** with its id, message count and the time of the last message. Hover it to see the last message.
+- **Each line is a plain edge** in its two chats' colors, with no label. Select it to show its × (hang up). The ⚙ modal lists each line's message count and when its last message came.
 - **Every message travels along its line as one dot**, from the sender to the receiver. TX blinks on the sender, RX on the receiver, and both boxes flash.
-- **Inspector.** Clicking a chat lists its lines, with Open conversation and Hang up.
+- **⚙ on each box** (or a double-click) opens a modal: the chat's info, its lines (Open conversation, Hang up) and its settings. Clicking a box only selects it.
+- **Ask first cards.** A message waiting for your OK shows as a card at the top, with Allow, Deny and a countdown.
 - **Agents setup** (top right) connects or disconnects agents' configs.
 - **Performance.** The canvas only moves while you look at it. A hidden dashboard gets no updates, then one refresh when it shows again. Messages from while it was hidden only add to the counts; they never replay. Box positions are remembered per dashboard.
 

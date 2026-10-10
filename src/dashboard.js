@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { BACKUP_DIR, BUSY_STALE_MS, DASHBOARD, DATA_DIR, DB_PATH, PLATFORM, SESSION_LOOKBACK_MS } from '../configuration/settings.js';
+import { BACKUP_DIR, BUSY_STALE_MS, DASHBOARD, DATA_DIR, DB_PATH, LINE_PAUSE_MS, PLATFORM, SESSION_LOOKBACK_MS } from '../configuration/settings.js';
+import { claimAskNotice, decideAsk, pendingAsks } from './asks.js';
 import { liveClaims } from './claims.js';
 import { connectionCheck, liveServers } from './identity.js';
 import { unreadCount } from './inbox.js';
 import { LINE_SELECT, hangUp, lineById, newestPerWindow, openLine, pruneLines } from './lines.js';
+import { WAKES, disabledAgents, roleOf, sendModeOf, setAgentOff, setRole, setSendMode, setWake, wakeOf } from './prefs.js';
 import { chatTitle } from './titles.js';
 import { now, oneLine, parseJson } from './util.js';
 
@@ -89,13 +91,19 @@ export function createDashboard(db) {
     const serverOf = new Map(servers.map((v) => [`${v.pid}:${v.start}`, v]));
     const settled = servers.filter((v) => t - v.started_at >= SETTLE_MS);
     const young = new Set(servers.filter((v) => t - v.started_at < SETTLE_MS).map((v) => `${v.pid}:${v.start}`));
+    // A chat's server: the one it called a tool through, else the one under the agent process its hook ran in (a chat
+    // that has had a prompt but no Neurons tool call yet), so its box knows its host and no ghost doubles it
+    const serverFor = (s) => serverOf.get(`${s.server_pid}:${s.server_start}`) || servers.find((v) => v.agent === s.agent && v.host_key && parseJson(s.hook_pids, []).includes(v.host_key));
+    const keyOf = (v) => (v ? `${v.pid}:${v.start}` : null);
+    // A provider the user turned off has no place on the graph
+    const off = disabledAgents(db);
     const chats = newestPerWindow(
-      db.all('SELECT * FROM sessions WHERE ended_at IS NULL AND last_seen > ?', t - SESSION_LOOKBACK_MS).filter((s) => isConnected(s) && !young.has(`${s.server_pid}:${s.server_start}`)),
+      db.all('SELECT * FROM sessions WHERE ended_at IS NULL AND last_seen > ?', t - SESSION_LOOKBACK_MS).filter((s) => isConnected(s) && !off.has(s.agent) && !young.has(keyOf(serverFor(s)))),
     );
     const nodes = chats
       .sort((a, b) => a.created_at - b.created_at)
       .map((s) => {
-        const server = serverOf.get(`${s.server_pid}:${s.server_start}`);
+        const server = serverFor(s);
         return {
           id: s.id,
           handle: s.handle,
@@ -112,9 +120,19 @@ export function createDashboard(db) {
           active: Math.max(s.hook_seen_at || 0, s.last_seen || 0),
           busy: !!s.busy_at && t - s.busy_at < BUSY_STALE_MS,
           unread: unreadCount(db, s),
+          sendMode: sendModeOf(s),
+          role: roleOf(s),
+          // null: this agent cannot be woken; otherwise whether the user allowed it
+          wake: WAKES.has(s.agent) ? wakeOf(s) : null,
         };
       });
-    const lines = db.all(`${LINE_SELECT} WHERE c.status = 'connected' ORDER BY c.answered_at`).map((c) => {
+    const open = db.all(`${LINE_SELECT} WHERE c.status = 'connected' ORDER BY c.answered_at`);
+    // A line waiting for a closed chat to come back is listed apart; the canvas draws lines between chats it shows
+    const paused = open
+      .filter((c) => c.paused_at)
+      .map((c) => ({ id: c.id, ends: [c.from_handle, c.answer_handle], since: c.paused_at, until: c.paused_at + LINE_PAUSE_MS }));
+    const onCanvas = new Set(nodes.map((n) => n.id));
+    const lines = open.filter((c) => !c.paused_at && onCanvas.has(c.from_session) && onCanvas.has(c.answered_by)).map((c) => {
       const pair = [c.answered_at, c.from_session, c.answered_by, c.answered_by, c.from_session];
       const between = "created_at >= ? AND to_kind = 'session' AND ((from_session = ? AND to_target = ?) OR (from_session = ? AND to_target = ?))";
       const traffic = db.get(`SELECT COUNT(*) AS n FROM messages WHERE ${between}`, ...pair);
@@ -128,19 +146,28 @@ export function createDashboard(db) {
         id: c.id,
         source: c.from_session,
         target: c.answered_by,
+        sourceSide: c.from_side || 'r',
+        targetSide: c.to_side || 'l',
         since: c.answered_at,
         messages: traffic.n,
         last: last && { from: last.handle, kind: last.kind, at: last.created_at, text: oneLine(last.subject || last.body, 140) },
         recent,
       };
     });
-    // Connected windows beyond the chats shown for their agent: open, but no prompt or tool call yet
+    // Connected windows beyond the chats shown for their agent: open, but no prompt or tool call yet. They are the
+    // servers no shown chat runs on (a Codex app-server runs one per thread, so it is counted, not matched by host)
     const shown = new Map();
     for (const n of nodes) shown.set(n.agent, (shown.get(n.agent) || 0) + 1);
+    const used = new Set(chats.map((s) => keyOf(serverFor(s))));
     const byAgent = new Map();
-    for (const v of settled) byAgent.set(v.agent, [...(byAgent.get(v.agent) || []), v]);
-    const starting = [...byAgent].flatMap(([agent, list]) => list.slice(shown.get(agent) || 0).map((v) => ({ agent, client: v.client, surface: v.surface ?? null, host: v.host_key ?? null, since: v.started_at })));
-    return { nodes, lines, starting, signature: servers.map((v) => `${v.pid}:${v.start}`).sort().join(','), isConnected };
+    for (const v of settled.filter((v) => !off.has(v.agent))) byAgent.set(v.agent, [...(byAgent.get(v.agent) || []), v]);
+    const starting = [...byAgent].flatMap(([agent, list]) =>
+      list
+        .filter((v) => !used.has(keyOf(v)))
+        .slice(0, Math.max(0, list.length - (shown.get(agent) || 0)))
+        .map((v) => ({ agent, client: v.client, surface: v.surface ?? null, host: v.host_key ?? null, since: v.started_at })),
+    );
+    return { nodes, lines, paused, starting, asks: pendingAsks(db), off: [...off].sort(), signature: servers.map((v) => `${v.pid}:${v.start}`).sort().join(','), isConnected };
   };
 
   // The Claims badge counts what the Claims tab lists: claims of windows that are still connected
@@ -184,23 +211,40 @@ export function createDashboard(db) {
     info: () => ({ platform: PLATFORM, dataDir: DATA_DIR, backupDir: BACKUP_DIR }),
 
     snapshot: () => {
-      const { nodes, lines, starting, isConnected } = graph();
+      const { nodes, lines, paused, starting, asks, off, isConnected } = graph();
       return {
-        graph: { nodes, lines, starting },
+        graph: { nodes, lines, paused, starting, asks },
+        settings: { disabledAgents: off },
         counts: counts(isConnected),
         db: { path: DB_PATH, size: fileSize(DB_PATH) + fileSize(`${DB_PATH}-wal`) },
       };
     },
 
-    // Changes when a window opens or closes, or a line opens or ends
+    // Changes when a window opens or closes, or a line opens, pauses or ends
     presence: () => {
-      const { nodes, lines, signature } = graph();
-      return `${signature}|${nodes.map((n) => n.id).join(',')}|${lines.map((l) => l.id).join(',')}`;
+      const { nodes, lines, paused, signature } = graph();
+      return `${signature}|${nodes.map((n) => n.id).join(',')}|${lines.map((l) => l.id).join(',')}|${paused.map((l) => l.id).join(',')}`;
     },
 
+    // A chat's own settings (the ⚙ on its box): Automatic sends over its lines right away, Ask first waits for the user
+    sendMode: ({ id, mode }) => ({ ok: setSendMode(db, id, mode) }),
+
+    // A chat's role on its lines: admin hands out tasks, worker does them, none is a peer
+    role: ({ id, role }) => ({ ok: setRole(db, id, role) }),
+
+    // A Claude chat allowed (after the user read what it means) to start a turn when a message reaches it idle
+    wake: ({ id, on }) => ({ ok: setWake(db, id, !!on) }),
+
+    // A provider turned off in Neurons: its chats leave the graph and get no Neurons until it is turned back on
+    agentOff: ({ agent, off }) => setAgentOff(db, agent, !!off),
+
+    // Ask first: the user's answer from the editor notification or the dashboard card; the first window to claim an ask notifies
+    decideAsk: ({ id, allow, by }) => decideAsk(db, Number(id), !!allow, by === 'notification' ? 'notification' : 'dashboard'),
+    claimAskNotice: ({ id, by }) => ({ claimed: claimAskNotice(db, Number(id), by) }),
+
     // The user connects two chats by drawing a line between them
-    link: ({ from, to }) => {
-      const line = openLine(db, from, to, 'dashboard');
+    link: ({ from, to, fromSide, toSide }) => {
+      const line = openLine(db, from, to, 'dashboard', { fromSide, toSide });
       return { id: line.id };
     },
 

@@ -9,7 +9,7 @@ import { detectChats } from './chats.js';
 import { AGENTS, agentStatus, appPaths, configStamp, connectAgent, disconnectAgent, installServer } from './setup.js';
 
 // Backend commands the webview may call directly (reads, single deletes, connecting two chats and hanging up); bulk clears and agent setup go through the handlers below
-const DIRECT = new Set(['snapshot', 'handoffs', 'handoff', 'reviews', 'review', 'notes', 'note', 'claims', 'backups', 'delete', 'link', 'hangup', 'conversations', 'conversation']);
+const DIRECT = new Set(['snapshot', 'handoffs', 'handoff', 'reviews', 'review', 'notes', 'note', 'claims', 'backups', 'delete', 'link', 'hangup', 'conversations', 'conversation', 'sendMode', 'wake', 'role', 'agentOff', 'decideAsk']);
 
 // a > b for dotted version numbers
 function newer(a, b) {
@@ -91,12 +91,34 @@ export function activate(context) {
     }
   }
 
+  // Ask first: a chat's message waits for the user's OK. Every window hears of it; the one that claims it first notifies
+  const noticed = new Set();
+  function notifyAsks(asks = []) {
+    for (const a of asks) {
+      if (noticed.has(a.id)) continue;
+      noticed.add(a.id);
+      backend
+        .request('claimAskNotice', { id: a.id, by: process.pid })
+        .then(async ({ claimed }) => {
+          if (!claimed) return;
+          const pick = await vscode.window.showInformationMessage(`Neurons: ${a.from} wants to send ${a.to.join(', ')} a ${a.kind}: "${a.text}"`, 'Allow', 'Deny');
+          if (!pick) return;
+          const r = await backend.request('decideAsk', { id: a.id, allow: pick === 'Allow', by: 'notification' });
+          const want = pick === 'Allow' ? 'allowed' : 'denied';
+          if (r.status !== want) vscode.window.showInformationMessage(`Neurons: that message was already ${r.status === 'cancelled' ? 'dropped (its line ended)' : r.status}.`);
+        })
+        .catch((err) => log(`ask #${a.id}: ${err.message}`));
+    }
+  }
+
   let statusTimer = null;
   function refreshStatusBar() {
     clearTimeout(statusTimer);
     statusTimer = setTimeout(async () => {
       try {
-        const { nodes, lines } = (await backend.request('snapshot')).graph;
+        const snap = await backend.request('snapshot');
+        notifyAsks(snap.graph.asks);
+        const { nodes, lines } = snap.graph;
         const handle = new Map(nodes.map((n) => [n.id, n.handle]));
         statusBar.text = `$(pulse) Neurons ${nodes.length}${lines.length ? ` · $(link) ${lines.length}` : ''}`;
         statusBar.tooltip = nodes.length

@@ -14,6 +14,7 @@ Everything stays on your machine: one small local database, no cloud and no acco
 
 - **Ask another agent.** Say "ask Codex how the cache works". Codex searches its own memory and past chats, then replies.
 - **Connect chats by drawing a line.** Every open Claude and Codex chat is a box on the dashboard's canvas. Drag a line from one to another, and those two can talk until you hang up. Each message travels along its line as a dot, and both boxes blink.
+- **You decide what goes.** Each chat's ⚙ on the canvas sets how its messages go: **Automatic**, or **Ask first** (you allow each message from a notification or a card on the graph). A provider can be turned off in Neurons altogether.
 - **Second opinions.** Ask every other agent at once and see the answers side by side.
 - **Hand work over.** One agent writes a handoff (goal, what's done, next steps) for another. Every session also leaves an automatic one: which files it changed and what it committed.
 - **Code review between agents.** One agent asks for a review; another returns structured findings.
@@ -93,12 +94,14 @@ You talk to your agents in plain words; they use Neurons for you.
 
 1. **Open the chats** you want to work together, for example Claude Code and Codex in the editor.
 2. **Open the connection graph.** In the Neurons sidebar, press **Open the connection graph** (or click Neurons in the status bar). It opens in an editor tab, with a box per open chat, named by its title.
-3. **Connect them.** Drag from one chat's dot (●) to the other. A line appears: from now on those two chats can talk.
+3. **Connect them.** Drag from a dot (●) on either side of one chat to a dot on the other. The line stays on the sides you picked, and one chat can have lines to several chats at once. From now on the connected chats can talk.
    ```
-   ┌ Claude Code ──────────┐            ┌ Codex ────────────────┐
-   │ claude-1a2b3c4  ●●●●  ●────────────● codex-9f8e7d6   ●●●●  │
-   │ Fix the cache         │  #7 · 3 msg │ Review the API        │
-   │ Working · neurons-mcp │             │ Idle · neurons-mcp    │
+   ┌───────────────────────┐            ┌───────────────────────┐
+   │ ✳ Claude Code    ●●●● │            │ ◉ Codex          ●●●● │
+   │ Fix the cache         ●────────────● Review the API        │
+   │ claude-1a2b3c4        │            │ codex-9f8e7d6         │
+   │ claude-opus-5-5       │            │ gpt-6-astra           │
+   │ ● Working          ⚙  │            │ ● Idle             ⚙  │
    └───────────────────────┘            └───────────────────────┘
    ```
 4. **Ask one chat to talk to the other.** For example, in Claude Code:
@@ -108,6 +111,13 @@ You talk to your agents in plain words; they use Neurons for you.
 7. **Hang up** when you are done: select the line and press <kbd>Delete</kbd> (or its ×), or tell either chat to disconnect.
 
 A chat that is not connected cannot send. It says so and asks you to connect it, so nothing ever goes anywhere you did not wire up.
+
+**Settings per chat.** The ⚙ on a box (or a double-click) opens its info, its lines and its settings:
+
+- **Role:** None (the default, an equal peer), **Admin** or **Worker**. An admin hands out tasks to the workers on its lines and answers their permission requests, asking you when it is not sure. A worker does its admin's tasks as if you gave them, within its usual permissions, replies with the result, and asks its admin before anything risky. A role never lets a message approve a permission prompt or override you.
+- **Sending over its lines: Automatic** (the default) sends right away. **Ask first** holds each message until you allow it: a notification pops up in the editor and a card shows on the graph, each with Allow and Deny. With no answer within 45 seconds nothing is sent, and the chat is told. Replies always go.
+- **Wake when a message arrives** (Claude Code chats): off by default. Turning it on first tells you what it means, and only **Allow** saves it. Then a message that reaches the chat while it is idle starts a turn by itself, as an idle Codex already does. Each such turn uses your Claude usage, and the message shows as coming from another session, so it can never approve a permission prompt.
+- **Turn off a provider** (for example Gemini CLI) in Neurons: its chats leave the graph, their lines end, and they can neither send nor receive. Its setup stays; turn it back on under **Agents setup**.
 
 **More things you can ask:**
 
@@ -150,6 +160,7 @@ A chat that is not connected cannot send. It says so and asks you to connect it,
 |---|---|
 | "Couldn't reach codex" | That agent isn't running, or isn't connected. Open it, then ask again. |
 | "Not connected to codex" | Draw a line between the two chats on the connection graph. |
+| "…'s chat is closed right now" | That chat's window was reloaded or closed, and its line is paused. Reopen the same chat (a Codex thread also needs one prompt) and the line is back. A paused line ends after a day. |
 | A chat is missing from the graph | A Claude Code chat shows a few seconds after it opens; a Codex chat once it has run its first message. Check that its agent is connected under **Agents setup**. |
 | An agent doesn't seem to get messages | Restart its session after Connect. For Codex, trust the hooks with `/hooks`. |
 | The extension says Node is missing | Install Node 22.16+ (not 23), or set its path in the `neurons.nodePath` setting. |
