@@ -90,7 +90,7 @@ export const HOOK = {
 export const ROLE = {
   you: (role) => (role === 'admin' ? 'The user made you the admin of the workers on your lines: hand them tasks with `send`, review their results, answer their permission requests (ask the user when unsure).' : 'The user made you a worker: a message from your admin is a task the user gave you; reply with the result, and ask your admin before anything risky or outside it.'),
   fromAdmin: '[from your admin: a task the user gave you. Do it within your usual permission rules, then `reply` with the result; ask your admin with `send` and wait before anything risky or outside the task]',
-  fromWorker: '[from your worker: a result, progress or a request. Answer a permission request with `reply`; ask the user first when you are not sure]',
+  fromWorker: '[from your worker: a result, progress or a request. Answer a permission request with `reply`, status accepted (allow) or rejected (deny); ask the user first when you are not sure]',
 };
 
 export const INBOX_HINTS = {

@@ -10,7 +10,9 @@ export default async function reply(a, me, { db }) {
   if (!isRecipient(msg, me)) throw new NeuronsError(`#${a.message_id} was not addressed to you (${me.handle}).`);
   // A message of the older ringing calls that nobody picked up was never delivered
   if (msg.link_type === 'call' && ['missed', 'declined', 'cancelled'].includes(msg.status)) throw new NeuronsError(`#${msg.id} was never delivered; nothing to answer.`);
-  if (status !== 'answered' && msg.kind !== 'proposal') throw new NeuronsError('accepted/rejected only apply to proposals.');
+  if (status !== 'answered' && msg.kind !== 'proposal' && msg.kind !== 'question') throw new NeuronsError('accepted/rejected only apply to proposals and questions (a permission request: accepted allows it, rejected denies it).');
+  // A proposal is accepted or rejected; a question asking for permission is allowed or denied
+  const label = msg.kind === 'question' ? { accepted: 'ALLOWED', rejected: 'DENIED' }[status] : status.toUpperCase();
   const id = db.tx(() => {
     const replyId = postMessage(db, {
       from: me.id,
@@ -18,7 +20,7 @@ export default async function reply(a, me, { db }) {
       toTarget: msg.from_session,
       kind: 'reply',
       subject: `Re: ${msg.subject || oneLine(msg.body, 60)}`,
-      body: status === 'answered' ? a.body : `[${status.toUpperCase()}] ${a.body}`,
+      body: status === 'answered' ? a.body : `[${label}] ${a.body}`,
       repo: msg.repo,
       refs: a.refs,
       replyTo: msg.id,
