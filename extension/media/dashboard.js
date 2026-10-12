@@ -97,7 +97,7 @@
       const chats = nodes.length
         ? nodes
             .map(
-              (n) => `<div class="chat-row">${dot(n.id)}${agentIcon(n.agent)}<div class="chat-main"><div class="chat-title">${name(n)}</div><div class="muted small">${esc(n.handle)} · ${esc(n.model || n.agent)}</div></div><span class="chat-state ${n.busy ? 'busy' : ''}">${n.busy ? 'Working' : 'Idle'}</span></div>`,
+              (n) => `<div class="chat-row">${dot(n.id)}${agentIcon(n.agent)}<div class="chat-main"><div class="chat-title">${name(n)}</div><div class="muted small">${esc(n.handle)} · ${esc(n.model || n.agent)}</div></div><span class="chat-state ${n.blocked ? 'blocked' : n.busy ? 'busy' : ''}"${n.blocked ? ` title="${esc(n.blocked.reason)}"` : ''}>${n.blocked ? 'Blocked' : n.busy ? 'Working' : 'Idle'}</span></div>`,
             )
             .join('')
         : empty('No chats yet. Each Claude Code or Codex chat appears here once it starts.');

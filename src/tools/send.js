@@ -1,4 +1,4 @@
-import { CALL, deliveredAll, localAnswer, localFallback, localUnavailable, localUnknown, noReply } from '../../configuration/prompts.js';
+import { CALL, LIMIT, deliveredAll, localAnswer, localFallback, localUnavailable, localUnknown, noReply } from '../../configuration/prompts.js';
 import { ASK_WAIT_MS, LIMITS, LOCAL_LLM } from '../../configuration/settings.js';
 import { awaitDecision, deliver, openAsk } from '../asks.js';
 import { joinBlocks, section } from '../format.js';
@@ -7,6 +7,7 @@ import { resolveTarget } from '../identity.js';
 import { formatMessage, postMessage, waitForReplies } from '../inbox.js';
 import { linesOf, pruneLines, requireLine } from '../lines.js';
 import { askLocal, hasModel, localBase, localModels } from '../local.js';
+import { blockedOf } from '../limits.js';
 import { agentLabel, isAgentOff, sendModeOf } from '../prefs.js';
 
 // The local model's answer, or why there is none: down | missing | unknown | error
@@ -54,12 +55,19 @@ export default async function send(a, me, { db, extra }) {
   if (isAgentOff(db, targetAgent)) throw new NeuronsError(CALL.peerOff(agentLabel(targetAgent)));
   pruneLines(db);
   const line = target.kind === 'all' ? null : requireLine(db, me, target);
+  // A chat its provider stopped (a usage limit, a lost login) gets nothing until then; the sender hears why at once
+  const block = line && blockedOf(line.peer);
+  if (block) throw new NeuronsError(LIMIT.peerBlocked(line.peer.handle, block));
   const all = line ? [] : linesOf(db, me);
-  // "all" asks every chat on a line that is open now; one whose chat closed is named instead
+  // "all" asks every chat on a line that is open now; one whose chat closed or that is blocked is named instead
   const closed = [...new Set(all.filter((l) => l.paused_at).map((l) => l.peer.handle))];
-  const routes = line ? [{ peer: line.peer, lineId: line.id }] : [...new Map(all.filter((l) => !l.paused_at).map((l) => [l.peer.id, { peer: l.peer, lineId: l.id }])).values()];
+  const blocked = [...new Set(all.filter((l) => !l.paused_at && blockedOf(l.peer)).map((l) => l.peer.handle))];
+  const routes = line ? [{ peer: line.peer, lineId: line.id }] : [...new Map(all.filter((l) => !l.paused_at && !blockedOf(l.peer)).map((l) => [l.peer.id, { peer: l.peer, lineId: l.id }])).values()];
   const peers = routes.map((r) => r.peer);
-  if (!peers.length) throw new NeuronsError(closed.length ? CALL.peerClosed(closed.join(', ')) : CALL.notConnected('any chat'));
+  if (!peers.length) {
+    if (blocked.length) throw new NeuronsError(LIMIT.skipped(blocked) + ' ' + (closed.length ? CALL.peerClosed(closed.join(', ')) : 'Nobody else is on your lines.'));
+    throw new NeuronsError(closed.length ? CALL.peerClosed(closed.join(', ')) : CALL.notConnected('any chat'));
+  }
 
   let fallback = null;
   if (a.local_first && kind === 'question') {
@@ -69,7 +77,7 @@ export default async function send(a, me, { db, extra }) {
   }
 
   const message = { from: me.id, kind, subject: a.subject, body: a.body, repo: a.repo || me.repo, refs: a.refs };
-  const skipped = closed.length ? CALL.skippedClosed(closed) : null;
+  const skipped = [closed.length ? CALL.skippedClosed(closed) : null, blocked.length ? LIMIT.skipped(blocked) : null].filter(Boolean).join(' ') || null;
 
   // Ask first (the user's setting for this chat): the message waits for their OK in the editor and goes once if allowed
   if (sendModeOf(me) === 'ask') {

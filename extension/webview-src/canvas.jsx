@@ -33,6 +33,12 @@ const AGENTS = {
   lmstudio: { name: 'LM Studio', order: 5 },
 };
 const agentName = (a) => AGENTS[a]?.name || a || 'Agent';
+// A time of day ("3:19 PM"), with the date when it is not today
+const clock = (ms) => {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+};
 const agentKey = (a) => (AGENTS[a] ? a : 'other');
 const SURFACES = { editor: 'Editor panel', terminal: 'Terminal', app: 'App' };
 
@@ -139,10 +145,17 @@ const ChatNode = memo(function ChatNode({ data, selected }) {
       </div>
       <div className="nc-foot">
         <div className="nc-chips">
-          <span className={`nc-status ${c.busy ? 'busy' : 'idle'}`} title={c.busy ? 'In a turn right now' : 'Waiting for a prompt'}>
-            <i />
-            {c.busy ? 'Working' : 'Idle'}
-          </span>
+          {c.blocked ? (
+            <span className="nc-status blocked" title={`Its provider stopped it: ${c.blocked.reason}. Messages to it are refused until then.`}>
+              <i />
+              Blocked{c.blocked.until ? ` · until ${clock(c.blocked.until)}` : ''}
+            </span>
+          ) : (
+            <span className={`nc-status ${c.busy ? 'busy' : 'idle'}`} title={c.busy ? 'In a turn right now' : 'Waiting for a prompt'}>
+              <i />
+              {c.busy ? 'Working' : 'Idle'}
+            </span>
+          )}
           {c.role ? (
             <span className={`nc-chip role-${c.role}`} title={c.role === 'admin' ? 'Hands out tasks to its workers' : 'Does the tasks its admin sends'}>
               {ROLE_NAMES[c.role]}
@@ -370,7 +383,7 @@ function ChatModal({ chat, hue, lines, chats, now, api, onClose }) {
               <dt>Runs in</dt>
               <dd>{SURFACES[chat.surface] || 'Unknown'}</dd>
               <dt>Status</dt>
-              <dd>{chat.busy ? 'Working on a turn' : 'Idle'}</dd>
+              <dd>{chat.blocked ? `Blocked: ${chat.blocked.reason}${chat.blocked.until ? ` (until ${clock(chat.blocked.until)})` : ''}` : chat.busy ? 'Working on a turn' : 'Idle'}</dd>
               <dt>Unread</dt>
               <dd>{chat.unread || 'None'}</dd>
               <dt>Opened</dt>

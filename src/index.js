@@ -6,6 +6,7 @@ import { SERVER_INSTRUCTIONS } from '../configuration/prompts.js';
 import { HEARTBEAT_MS, SERVER_NAME, VERSION } from '../configuration/settings.js';
 import { openDb } from './db.js';
 import { Identity } from './identity.js';
+import { startBlockWatch } from './limits.js';
 import { startMessageRelay } from './relay.js';
 import { log, registerTools } from './registry.js';
 
@@ -13,12 +14,13 @@ const db = openDb();
 const identity = new Identity(db);
 const server = new McpServer({ name: SERVER_NAME, version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 // Once the client says who it is, announce this window as connected so peers can reach it
-// From the background: messages for an idle agent
+// From the background: messages for an idle agent, and telling whoever waits on this chat when its provider stops it
 const stops = [];
 server.server.oninitialized = () => {
   identity.setClient(server.server.getClientVersion());
   identity.registerServer();
   stops.push(startMessageRelay({ server, db, identity, log }));
+  stops.push(startBlockWatch({ db, identity, log }));
 };
 
 registerTools(server, db, identity);

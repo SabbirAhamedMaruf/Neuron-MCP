@@ -160,6 +160,7 @@ A chat that is not connected cannot send. It says so and asks you to connect it,
 |---|---|
 | "Couldn't reach codex" | That agent isn't running, or isn't connected. Open it, then ask again. |
 | "Not connected to codex" | Draw a line between the two chats on the connection graph. |
+| "[BLOCKED] … could not answer" or "… is blocked" | That chat hit its provider's usage limit (or lost its login). Whoever waits on it is told at once, with the reset time when the provider gives one, and new messages to it are refused until then. Its box shows **Blocked**. Ask another chat, or send again later. |
 | "…'s chat is closed right now" | That chat's window was reloaded or closed, and its line is paused. Reopen the same chat (a Codex thread also needs one prompt) and the line is back. A paused line ends after a day. |
 | A chat is missing from the graph | A Claude Code chat shows a few seconds after it opens; a Codex chat once it has run its first message. Check that its agent is connected under **Agents setup**. |
 | An agent doesn't seem to get messages | Restart its session after Connect. For Codex, trust the hooks with `/hooks`. |

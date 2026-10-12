@@ -140,6 +140,16 @@ body.vscode-high-contrast-light .nc-root {
   animation: nc-pulse 1.6s ease-out infinite;
 }
 
+.nc-status.blocked {
+  color: var(--vscode-errorForeground);
+  border-color: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+}
+
+.nc-status.blocked i {
+  background: var(--vscode-errorForeground);
+}
+
 .nc-status.starting i {
   background: var(--nc-muted);
 }

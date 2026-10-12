@@ -1,7 +1,8 @@
-import { CALL } from '../configuration/prompts.js';
+import { CALL, LIMIT } from '../configuration/prompts.js';
 import { LINE_PAUSE_MS } from '../configuration/settings.js';
 import { NeuronsError } from './guard.js';
 import { connectionCheck } from './identity.js';
+import { blockedOf } from './limits.js';
 import { agentLabel, isAgentOff } from './prefs.js';
 import { now } from './util.js';
 
@@ -115,6 +116,8 @@ export function overLine(db, me, target) {
   if (isAgentOff(db, agent)) throw new NeuronsError(CALL.peerOff(agentLabel(agent)));
   const line = lineFor(db, me, target);
   if (line?.paused_at) throw new NeuronsError(CALL.peerClosed(line.peer.handle));
+  const block = line && blockedOf(line.peer);
+  if (block) throw new NeuronsError(LIMIT.peerBlocked(line.peer.handle, block));
   return line ? { kind: 'session', target: line.peer.id, label: `${line.peer.handle} (line #${line.id})`, session: line.peer } : target;
 }
 

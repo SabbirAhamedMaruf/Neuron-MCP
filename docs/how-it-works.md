@@ -20,6 +20,15 @@ claude-a: send(to: "gemini", …)  "Not connected to gemini: … ask the user to
 - **A line ends by itself** when its closed chat is not back within a day, or when a Claude Code or Gemini chat is cleared or replaced in its window. A new chat must be connected again.
 - **Handoffs and reviews** do not need a line. They go to the agent's inbox, or over a line when there is one.
 
+## A chat its provider stopped
+
+A usage limit or a lost login stops a chat from answering anything. Without help, whoever sent it a message would wait forever.
+
+- **Noticed by its own Neurons server.** Every 5 seconds, while something waits on it, the server reads the error records of its own chat's files: the Claude Code transcript (`isApiErrorMessage`, `error: rate_limit` and the like) or the Codex thread file (`task_complete` with `error.codex_error_info: usage_limit_exceeded`, plus the `rate_limits` it recorded). It reads nothing that was said.
+- **Whoever waits hears at once.** Each unanswered question, proposal or review request, and each message it never read, gets one reply sent by Neurons on its behalf: `[BLOCKED] codex-… could not answer: You hit your usage limit · try again at 3:19 PM. Nothing was done…`. A sender blocking on `wait_seconds` gets that reply.
+- **New messages are refused** with the reason and the reset time (`send`, handoffs, reviews; `"all"` skips it and names it). Its box shows **Blocked · until …**, as does `discover`.
+- **Over when** the reset time passes (15 minutes when the provider gives none, as for a lost login), or as soon as the chat calls a Neurons tool, being at work again.
+
 ## Settings
 
 Set from the dashboard, kept in the database, so every chat's Neurons server and hook reads them.

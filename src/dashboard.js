@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BACKUP_DIR, BUSY_STALE_MS, DASHBOARD, DATA_DIR, DB_PATH, LINE_PAUSE_MS, PLATFORM, SESSION_LOOKBACK_MS } from '../configuration/settings.js';
 import { claimAskNotice, decideAsk, pendingAsks } from './asks.js';
+import { blockedOf } from './limits.js';
 import { liveClaims } from './claims.js';
 import { connectionCheck, liveServers } from './identity.js';
 import { unreadCount } from './inbox.js';
@@ -122,6 +123,8 @@ export function createDashboard(db) {
           unread: unreadCount(db, s),
           sendMode: sendModeOf(s),
           role: roleOf(s),
+          // Stopped by its provider (a usage limit, a lost login): why, and until when if it said
+          blocked: blockedOf(s, t),
           // null: this agent cannot be woken; otherwise whether the user allowed it
           wake: WAKES.has(s.agent) ? wakeOf(s) : null,
         };

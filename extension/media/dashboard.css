@@ -798,6 +798,11 @@ body.vscode-high-contrast-light .chat-dot {
   color: var(--vscode-charts-yellow);
 }
 
+/* Stopped by its provider (a usage limit, a lost login) */
+.chat-state.blocked {
+  color: var(--vscode-errorForeground);
+}
+
 /* Ask first: a message waiting for the user's OK */
 .ask-row {
   padding: 8px 10px;

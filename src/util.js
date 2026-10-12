@@ -17,6 +17,13 @@ export function ago(ms) {
 // Local wall-clock time, "YYYY-MM-DD HH:MM"
 export const iso = (ms) => (ms ? new Date(ms).toLocaleString('sv-SE').slice(0, 16) : '');
 
+// A time of day for messages ("3:19 PM"), with the date when it is not today
+export function clockTime(ms) {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
 export function oneLine(text, max = 120) {
   const t = String(text ?? '').replace(/\s+/g, ' ').trim();
   return t.length > max ? t.slice(0, max - 1) + '…' : t;

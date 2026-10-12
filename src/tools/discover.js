@@ -5,6 +5,7 @@ import { list, sessionLine } from '../format.js';
 import { assertClean } from '../guard.js';
 import { connectionCheck } from '../identity.js';
 import { unreadCount } from '../inbox.js';
+import { blockedOf } from '../limits.js';
 import { disabledAgents, roleOf } from '../prefs.js';
 import { ago, now } from '../util.js';
 
@@ -29,7 +30,7 @@ export default async function discover({ model, task, label }, me, { db }) {
   return [
     `You are ${me.handle} (${me.model || me.agent})${me.repo ? `, repo ${me.repo}` : ''}. Inbox: ${unreadCount(db, me)} unread.`,
     roleLine,
-    lines.length ? `Lines: ${lines.map((l) => `${l.peer.handle}${roleOf(l.peer) ? ` [${roleOf(l.peer)}]` : ''} (#${l.id}, ${l.paused_at ? 'paused: its chat is closed' : ago(l.answered_at)})`).join(', ')}` : null,
+    lines.length ? `Lines: ${lines.map((l) => `${l.peer.handle}${roleOf(l.peer) ? ` [${roleOf(l.peer)}]` : ''} (#${l.id}, ${l.paused_at ? 'paused: its chat is closed' : blockedOf(l.peer) ? `blocked: ${blockedOf(l.peer).reason}` : ago(l.answered_at)})`).join(', ')}` : null,
     peers.length ? `Online:\n${list(peers.map((s) => `${sessionLine(s)}${onLine.has(s.id) ? ' · on your line' : ''}`))}` : 'Nobody else is online.',
   ]
     .filter(Boolean)

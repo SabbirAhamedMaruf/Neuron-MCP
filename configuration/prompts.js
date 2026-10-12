@@ -86,6 +86,15 @@ export const HOOK = {
 };
 
 // The next step shown under each inbox item, by message kind
+// A chat its provider stopped (a usage limit, a lost login): the chats waiting on it hear so instead of waiting forever
+const after = (block) => (block.untilText ? `after ${block.untilText}` : 'later');
+export const LIMIT = {
+  // Sent back, by Neurons on the blocked chat's behalf, for each message it could not get to
+  blockedReply: (handle, block) => `[BLOCKED] ${handle} could not answer: ${block.reason}. Nothing was done; send it again ${after(block)} or ask another chat.`,
+  peerBlocked: (handle, block) => `${handle} is blocked: ${block.reason}. Nothing was sent; try again ${after(block)} or ask another chat.`,
+  skipped: (handles) => `Not asked (blocked): ${handles.join(', ')}.`,
+};
+
 // Roles the user set in the dashboard: what a message between an admin and its worker is, and what the chat itself is
 export const ROLE = {
   you: (role) => (role === 'admin' ? 'The user made you the admin of the workers on your lines: hand them tasks with `send`, review their results, answer their permission requests (ask the user when unsure).' : 'The user made you a worker: a message from your admin is a task the user gave you; reply with the result, and ask your admin before anything risky or outside it.'),

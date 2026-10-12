@@ -274,6 +274,13 @@ const MIGRATIONS = [
     if (!has('calls', 'to_side')) raw.exec('ALTER TABLE calls ADD COLUMN to_side TEXT');
     if (!has('sessions', 'role')) raw.exec('ALTER TABLE sessions ADD COLUMN role TEXT');
   },
+  // A chat its provider stopped (a usage limit, a lost login): since when, until when if the provider said, and why
+  (raw) => {
+    const has = (column) => raw.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?").get(column);
+    if (!has('blocked_at')) raw.exec('ALTER TABLE sessions ADD COLUMN blocked_at INTEGER');
+    if (!has('blocked_until')) raw.exec('ALTER TABLE sessions ADD COLUMN blocked_until INTEGER');
+    if (!has('blocked_reason')) raw.exec('ALTER TABLE sessions ADD COLUMN blocked_reason TEXT');
+  },
 ];
 
 // node:sqlite rejects undefined, so absent optional values bind as NULL

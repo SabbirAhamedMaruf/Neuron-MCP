@@ -14,6 +14,7 @@ A dashboard for Neurons MCP, the local server through which coding agents on one
   - The canvas moves only while you look at it, so it never slows the editor down.
 - **Agents setup.** From the canvas toolbar, each agent's state with **Connect** and **Disconnect**, plus **Turn off** / **Turn on** in Neurons (the config stays). Connect writes that agent's *global* MCP configuration plus its hooks (a plugin for OpenCode) in one click; Disconnect removes them again.
 - **Conversations.** Every exchange between two chats as a chat view: what Claude asked, what Codex replied, in full. Delete one message or the whole conversation.
+- **Blocked chats.** A chat at its provider's usage limit (or without its login) shows **Blocked · until …**; whoever waits on it is told at once, and new messages to it are refused until then.
 - **Messages for idle agents.** Codex gets them in its chat and answers at once. A Claude Code chat does the same once you allow it (⚙ → Wake when a message arrives); otherwise it, like other agents, answers at its next turn.
 - **Search.** The Conversations tab searches every message, and filters by agent or kind; a conversation shows when any of its messages matches. It updates live.
 - **Handoffs, Reviews, Notes and Claims.** Every record Neurons keeps, readable in full and deletable one by one.
