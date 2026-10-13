@@ -5,7 +5,7 @@ A dashboard for Neurons MCP, the local server through which coding agents on one
 ## What you get
 
 - **A Neurons icon in the activity bar.** It opens a dashboard in the sidebar. **Open in editor** shows the same dashboard in a full editor tab.
-- **The connection graph** (in an editor tab; the sidebar's Live tab lists chats and opens it). Every open chat is a box in its own color: its agent's icon and name with a small panel of server-style lights (PWR open, ACT working, TX and RX a message sent or received), the chat's name, its handle and model, and its status with a ⚙.
+- **The connection graph** (in an editor tab; the sidebar's Live tab lists chats and opens it). Every open chat is a box in its own color: its agent's icon and name with a small panel of server-style lights (PWR open, ACT working, MSG lit while it sends a message and blinking as one arrives), the chat's name, its handle and model, and its status with a ⚙.
   - Drag a line from either side of one chat to another to connect them; it stays on the sides you picked, and a chat can have several lines. Only connected chats can talk.
   - Each message travels along its line as a dot, and both boxes blink.
   - Select a line and press Delete (or its ×) to hang up.

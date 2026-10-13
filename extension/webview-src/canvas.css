@@ -163,7 +163,7 @@ body.vscode-high-contrast-light .nc-root {
   }
 }
 
-/* The front panel: four LEDs like a server's, dim until they light, at the top right of the box */
+/* The front panel: three LEDs like a server's (PWR, ACT, MSG), dim until they light, at the top right of the box */
 .nc-leds {
   margin-left: auto;
   display: inline-flex;
@@ -190,12 +190,8 @@ body.vscode-high-contrast-light .nc-root {
   --led: var(--nc-busy);
 }
 
-.nc-led.tx {
+.nc-led.msg {
   --led: var(--chat-color);
-}
-
-.nc-led.rx {
-  --led: var(--nc-focus);
 }
 
 .nc-led.on {
@@ -208,8 +204,26 @@ body.vscode-high-contrast-light .nc-root {
   animation: nc-activity 1.3s steps(1, end) infinite;
 }
 
-.nc-led.blink {
+/* MSG on the sender: lit while its message travels the line (as long as the dot's flight), then off */
+.nc-led.msg.send {
+  animation: nc-send 1200ms linear 1;
+}
+
+/* MSG on the receiver: blinks as the message arrives, then off */
+.nc-led.msg.recv {
   animation: nc-blink 900ms ease-out 1;
+}
+
+@keyframes nc-send {
+  0%,
+  94% {
+    background: var(--led);
+    box-shadow: 0 0 8px var(--led);
+  }
+  100% {
+    background: color-mix(in srgb, var(--led) 28%, transparent);
+    box-shadow: none;
+  }
 }
 
 @keyframes nc-activity {

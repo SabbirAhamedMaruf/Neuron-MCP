@@ -106,15 +106,15 @@ function AgentIcon({ agent }) {
   );
 }
 
-// A server front panel: PWR (open), ACT (in a turn, flickering like disk activity), TX and RX (a message sent or
-// received). A blink restarts by remounting its LED, keyed by how many times it fired
-function Leds({ busy, tx = 0, rx = 0 }) {
+// A server front panel: PWR (open), ACT (in a turn, flickering like disk activity) and MSG: on the sender it is lit
+// while its message travels the line and goes off as it lands; on the receiver it blinks as the message arrives, then
+// goes off. Each event restarts it by remounting the LED, keyed by how many times it fired
+function Leds({ busy, msg = 0, kind = null }) {
   return (
     <span className="nc-leds" aria-label={busy ? 'Working' : 'Idle'}>
       <span className="nc-led pwr on" title="Open" />
       <span className={`nc-led act${busy ? ' on' : ''}`} title={busy ? 'Working on a turn' : 'Idle'} />
-      <span key={`tx${tx}`} className={`nc-led tx${tx ? ' blink' : ''}`} title="Sent a message" />
-      <span key={`rx${rx}`} className={`nc-led rx${rx ? ' blink' : ''}`} title="Received a message" />
+      <span key={`msg${msg}`} className={`nc-led msg${kind ? ` ${kind}` : ''}`} title="Lights while it sends a message, and as one arrives" />
     </span>
   );
 }
@@ -132,7 +132,7 @@ const ChatNode = memo(function ChatNode({ data, selected }) {
       <div className="nc-head">
         <AgentIcon agent={c.agent} />
         <span className="nc-agent">{agentName(c.agent)}</span>
-        <Leds busy={c.busy} tx={led.tx} rx={led.rx} />
+        <Leds busy={c.busy} msg={led.msg} kind={led.kind} />
       </div>
       <div className={`nc-title${c.title ? '' : ' untitled'}`} title={name}>
         {name}
@@ -552,7 +552,8 @@ function Canvas({ store, api }) {
   const timers = useRef(new Set());
   const [flights, setFlights] = useState([]);
   const [leds, setLeds] = useState({});
-  const blink = useCallback((nodeId, kind) => setLeds((l) => ({ ...l, [nodeId]: { ...l[nodeId], [kind]: (l[nodeId]?.[kind] || 0) + 1, flash: (l[nodeId]?.flash || 0) + 1 } })), []);
+  // kind: 'send' (lit while the dot travels) or 'recv' (a blink as it lands); msg counts events to restart the LED
+  const blink = useCallback((nodeId, kind) => setLeds((l) => ({ ...l, [nodeId]: { ...l[nodeId], kind, msg: (l[nodeId]?.msg || 0) + 1, flash: (l[nodeId]?.flash || 0) + 1 } })), []);
   const later = useCallback((fn, ms) => {
     const t = setTimeout(() => {
       timers.current.delete(t);
@@ -579,8 +580,8 @@ function Canvas({ store, api }) {
     ]);
     shown.forEach((x, i) => {
       const [from, to] = x.m.fromSource ? [x.line.source, x.line.target] : [x.line.target, x.line.source];
-      later(() => blink(from, 'tx'), i * STAGGER_MS);
-      later(() => blink(to, 'rx'), i * STAGGER_MS + FLIGHT_MS);
+      later(() => blink(from, 'send'), i * STAGGER_MS);
+      later(() => blink(to, 'recv'), i * STAGGER_MS + FLIGHT_MS);
     });
   }, [snap, visible]);
   const onLanded = useCallback((key) => setFlights((f) => f.filter((x) => x.key !== key)), []);

@@ -2,7 +2,7 @@
   "name": "neurons",
   "displayName": "Neurons",
   "description": "Let the coding agents on your machine ask each other: connect their chats on a live canvas, follow every conversation, and set up Claude Code, Codex, Gemini CLI and OpenCode in one click.",
-  "version": "0.16.17",
+  "version": "0.16.19",
   "publisher": "sabbirahamedmaruf",
   "author": {
     "name": "Sabbir Ahamed Maruf"

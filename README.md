@@ -106,7 +106,7 @@ You talk to your agents in plain words; they use Neurons for you.
    ```
 4. **Ask one chat to talk to the other.** For example, in Claude Code:
    > Ask Codex where the cache TTL is set.
-5. **Watch it travel.** The message moves along the line as a dot, and both boxes blink their lights (TX on the sender, RX on the receiver).
+5. **Watch it travel.** The message moves along the line as a dot, and the MSG light is lit on the sender while it travels, then blinks on the receiver as it arrives; both go off afterwards.
 6. **The other chat answers** from its own memory and past chats; the answer comes back the same way, and the asking chat tells you.
 7. **Hang up** when you are done: select the line and press <kbd>Delete</kbd> (or its ×), or tell either chat to disconnect.
 
@@ -138,7 +138,7 @@ A chat that is not connected cannot send. It says so and asks you to connect it,
 
 ### Following along
 
-- **Connection graph** (an editor tab): every open chat is a box in its own color, titled as its agent titles it, with a small panel of lights: PWR (open), ACT (working), TX and RX (a message sent or received). Click a chat to see its lines and open the conversation. **Agents setup** (top right) connects or disconnects agents. **Conversations** shows every exchange as a chat, with search. Other tabs hold handoffs, reviews, notes, claims and storage (with backups before every clear).
+- **Connection graph** (an editor tab): every open chat is a box in its own color, titled as its agent titles it, with a small panel of lights: PWR (open), ACT (working) and MSG (lit while it sends a message, blinks as one arrives). Its ⚙ (or a double-click) shows its info, lines and settings. **Agents setup** (top right) connects or disconnects agents. **Conversations** shows every exchange as a chat, with search. Other tabs hold handoffs, reviews, notes, claims and storage (with backups before every clear).
 - The canvas only moves while you look at it, so it never slows the editor down.
 - **Terminal**:
   ```sh

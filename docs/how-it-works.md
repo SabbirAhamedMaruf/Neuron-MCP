@@ -51,13 +51,12 @@ A [React Flow](https://reactflow.dev) canvas in an editor tab (the dashboard ope
   - **Middle:** the chat's name as its agent shows it (Claude Code's custom or AI title, Codex's thread name), its handle (the name other agents send to), then its model.
   - **Bottom:** Working or Idle, "Ask first" and unread count when they apply, and the ⚙ on the right. Repo, task and the rest are in the ⚙ modal.
 
-  The front panel has four lights:
+  The front panel has three lights:
   - PWR: the chat is open;
   - ACT: it is working on a turn;
-  - TX: it sent a message;
-  - RX: it received one.
+  - MSG: on the sender it is lit while its message travels the line and goes off as it lands; on the receiver it blinks as the message arrives, then goes off.
 - **Each line is a plain edge** in its two chats' colors, with no label. Select it to show its × (hang up). The ⚙ modal lists each line's message count and when its last message came.
-- **Every message travels along its line as one dot**, from the sender to the receiver. TX blinks on the sender, RX on the receiver, and both boxes flash.
+- **Every message travels along its line as one dot**, from the sender to the receiver. MSG is lit on the sender while it travels, then blinks on the receiver, and both boxes flash.
 - **⚙ on each box** (or a double-click) opens a modal: the chat's info, its lines (Open conversation, Hang up) and its settings. Clicking a box only selects it.
 - **Ask first cards.** A message waiting for your OK shows as a card at the top, with Allow, Deny and a countdown.
 - **Agents setup** (top right) connects or disconnects agents' configs.
