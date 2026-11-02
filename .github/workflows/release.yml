@@ -1,0 +1,48 @@
+# Pushing a v* tag builds the extension's .vsix, checks it carries the tag's version and the GPL license, and attaches it to the GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  vsix:
+    name: Build and publish the vsix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the server, CLI and vsix
+        run: npm run package
+      - name: Check version and license
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          vsix="dist/neurons-$version.vsix"
+          if [ ! -f "$vsix" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the package.json version"; ls dist; exit 1
+          fi
+          unzip -l "$vsix" | grep -q "extension/LICENSE"
+          unzip -p "$vsix" extension/package.json | grep -q '"license": "GPL-3.0-or-later"'
+          (cd dist && sha256sum "neurons-$version.vsix" > "neurons-$version.vsix.sha256")
+          echo "VSIX=$vsix" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A re-pushed tag replaces the files of its existing release instead of failing.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$VSIX" "$VSIX.sha256" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$VSIX" "$VSIX.sha256" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Neurons $VERSION" \
+              --generate-notes
+          fi
