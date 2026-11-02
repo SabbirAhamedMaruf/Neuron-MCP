@@ -173,3 +173,9 @@ A chat that is not connected cannot send. It says so and asks you to connect it,
 - the tools, the security model and every setting;
 - manual hook setup;
 - the project layout for developers.
+
+## License
+
+Neurons is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY.
+
+Copyright (C) 2026 Sabbir Ahamed Maruf.
